@@ -1,7 +1,7 @@
 # Hermes Agent Integration — Design
 
 **Date:** 2026-04-21
-**Status:** Approved (ready for implementation plan) — revised 2026-04-21 after Hermes docs research surfaced the built-in OpenAI-compatible API server adapter (replaces planned ACP spike + custom web gateway adapter).
+**Status:** **Implemented 2026-04-21 (hermes-v1).** End-to-end working in production: browser → backend `/api/agent/chat/completions` proxy → Hermes `api_server` on private network → OpenRouter (Gemma 4 31B) → MCP tool call into the trading backend. See `docs/superpowers/plans/2026-04-21-hermes-agent-integration.md` for the as-built notes including two Railway deploy gotchas (per-service `rootDirectory`, mandatory `PORT` env var) and the FastMCP launch fix (run script directly, not `python -m fastmcp`).
 **Scope:** Sub-project #1 of 3 — replace OpenClaw with Hermes (NousResearch) as the trading-control agent, add a web chat UI, keep existing Telegram approval flow untouched.
 
 ---
