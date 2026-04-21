@@ -34,19 +34,12 @@ mcp_servers:
       ALGOFUN_BACKEND_URL: ${ALGOFUN_BACKEND_URL}
       TRADE_API_SECRET: ${TRADE_API_SECRET}
 
-platforms:
-  telegram:
-    enabled: true
-    # TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USERS are read from .env.
-
-  api_server:
-    enabled: true
-    extra:
-      host: "0.0.0.0"
-      port: 8642
-      # No public auth here — the backend is the only client and gates
-      # with AGENT_CHAT_TOKEN. The api_server is reachable only over
-      # Railway's private network, never from the public internet.
+# Note on platforms (Telegram + api_server):
+# Hermes configures both via env vars in /data/.hermes/.env, NOT here.
+# The entrypoint script writes:
+#   - TELEGRAM_BOT_TOKEN / TELEGRAM_ALLOWED_USERS  (enables Telegram)
+#   - API_SERVER_ENABLED=true / API_SERVER_HOST / API_SERVER_PORT
+# `hermes config check` lists every supported env var.
 
 display:
   tool_progress: all
