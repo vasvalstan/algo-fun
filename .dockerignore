@@ -1,0 +1,34 @@
+# Local virtualenv & caches
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Frontend (deployed as a separate Railway service)
+frontend/
+node_modules/
+
+# Local dev artifacts
+*.log
+state.json
+paper_state.json
+ledger.json
+
+# Secrets — production uses Railway env vars
+.env
+.env.*
+private.pem
+public.pem
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+.cursor/
+
+# Other repos / docs that don't need to ship to prod
+openclaw/
+tradingview-mcp-jackson/
+*.md
