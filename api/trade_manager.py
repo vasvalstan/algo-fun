@@ -2,7 +2,7 @@
 Trade manager — pending trade queue with approval/rejection and timeout expiry.
 
 All live trades flow through here when TRADE_APPROVAL_REQUIRED is enabled.
-External callers (OpenClaw MCP, Telegram bot, REST API) create pending trades,
+External callers (Hermes MCP, Telegram bot, REST API) create pending trades,
 and they only execute on Binance after explicit approval.
 """
 
@@ -45,7 +45,7 @@ class PendingTrade:
     execution_result: Optional[dict] = None
     reject_reason: Optional[str] = None
     telegram_message_id: Optional[int] = None
-    source: str = "manual"  # manual | bot_signal | openclaw
+    source: str = "manual"  # manual | bot_signal | hermes
 
     def __post_init__(self):
         if self.expires_at == 0.0:

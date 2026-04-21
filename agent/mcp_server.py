@@ -1,11 +1,14 @@
 """
-OpenClaw MCP skill — exposes ALGO-FUN trading system as tools.
+Hermes MCP skill — exposes ALGO-FUN trading system as tools.
 
-Run standalone:
-    uvx fastmcp run openclaw/mcp_server.py
+Loaded by the Hermes agent on the `agent` Railway service via
+agent/config.yaml (`mcp_servers.algo-fun-trading`). Hermes spawns this
+file as a stdio MCP subprocess: `python /app/mcp_server.py`.
 
-Or install into OpenClaw:
-    clawhub install ./openclaw
+For local hacking outside Hermes:
+    ALGOFUN_BACKEND_URL=http://localhost:8000 \\
+    TRADE_API_SECRET=dev-secret \\
+    python agent/mcp_server.py
 """
 
 import json
@@ -94,7 +97,7 @@ async def request_trade(
         pair=pair,
         side=side.upper(),
         size_usdt=size_usdt,
-        source="openclaw",
+        source="hermes",
     )
     data = await _post("/api/trades/request", body)
     trade = data.get("trade", {})
