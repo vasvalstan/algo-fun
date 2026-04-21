@@ -42,6 +42,7 @@ from api.strategy_chat import propose_param_patch
 from api.trade_manager import trade_manager, TradeStatus
 from api.telegram_bot import run_telegram_bot
 from api import audit
+from api.agent_proxy import router as agent_proxy_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -200,6 +201,9 @@ if _rx:
     _cors_kwargs["allow_origin_regex"] = _rx
 
 app.add_middleware(CORSMiddleware, **_cors_kwargs)
+
+# Hermes web chat reverse proxy.
+app.include_router(agent_proxy_router)
 
 # Shared WebSocket manager
 ws_manager = WSManager()
