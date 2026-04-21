@@ -1,0 +1,42 @@
+# ─── Python ──────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# ─── Node / Vite ─────────────────────────────────────────────────────
+node_modules/
+dist/
+
+# ─── Secrets and local env ───────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.railway/
+scripts/railway.env
+*.pem
+*.pem.bak.*
+private.pem
+public.pem
+
+# ─── Runtime state and logs ──────────────────────────────────────────
+state.json
+paper_state.json
+paper_dashboard.json
+ledger.json
+bot.log
+dry_run.log
+*.log
+
+# ─── Local agent data ────────────────────────────────────────────────
+agent/.local-data/
+agent/.env.local
+
+# ─── Editor / OS ─────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
