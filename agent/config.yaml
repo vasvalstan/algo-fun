@@ -1,0 +1,52 @@
+# Hermes Agent config — non-secrets only.
+# Secrets (OPENROUTER_API_KEY, TELEGRAM_BOT_TOKEN, etc.) live in
+# /data/.hermes/.env, seeded from Railway env vars by /app/entrypoint.sh
+# on first boot.
+#
+# Default model: Hermes 4 70B via OpenRouter — same vendor as the agent
+# framework (Nous Research), so most likely model their tool-calling
+# pipeline is verified against. ~$0.13/M in, $0.40/M out, 131K ctx.
+
+model: openrouter/nousresearch/hermes-4-70b
+
+terminal:
+  backend: local
+  cwd: "/app"
+  timeout: 30
+
+# Restrict the agent to MCP-only tooling for sub-project #1.
+# Code-edit / shell access is intentionally disabled here — that's
+# sub-project #3 territory and has its own threat model.
+tools:
+  disabled:
+    - terminal_tool
+    - file_tools
+    - code_execution_tool
+    - browser_tool
+    - web_tools
+    - delegate_tool
+
+mcp_servers:
+  algo-fun-trading:
+    command: python
+    args: ["-m", "fastmcp", "run", "/app/mcp_server.py"]
+    env:
+      ALGOFUN_BACKEND_URL: ${ALGOFUN_BACKEND_URL}
+      TRADE_API_SECRET: ${TRADE_API_SECRET}
+
+platforms:
+  telegram:
+    enabled: true
+    # TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USERS are read from .env.
+
+  api_server:
+    enabled: true
+    extra:
+      host: "0.0.0.0"
+      port: 8642
+      # No public auth here — the backend is the only client and gates
+      # with AGENT_CHAT_TOKEN. The api_server is reachable only over
+      # Railway's private network, never from the public internet.
+
+display:
+  tool_progress: all
