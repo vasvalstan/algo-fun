@@ -22,6 +22,11 @@ ledger.json
 private.pem
 public.pem
 
+# Hermes Agent local-only files (never ship the local Volume contents
+# or the local secrets file).
+agent/.env.local
+agent/.local-data/
+
 # Editor / OS noise
 .DS_Store
 .idea/
@@ -29,6 +34,5 @@ public.pem
 .cursor/
 
 # Other repos / docs that don't need to ship to prod
-openclaw/
 tradingview-mcp-jackson/
 *.md
