@@ -112,6 +112,9 @@ function RootLayout() {
             <Link to="/history" className="nav-link" activeProps={{ style: { opacity: 1 } }}>
               History
             </Link>
+            <Link to="/chat" className="nav-link" activeProps={{ style: { opacity: 1 } }}>
+              Chat
+            </Link>
             <PlatformAccountControls />
           </nav>
         </div>
