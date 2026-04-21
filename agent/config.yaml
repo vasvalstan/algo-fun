@@ -3,11 +3,31 @@
 # /data/.hermes/.env, seeded from Railway env vars by /app/entrypoint.sh
 # on first boot.
 #
-# Default model: Hermes 4 70B via OpenRouter — same vendor as the agent
-# framework (Nous Research), so most likely model their tool-calling
-# pipeline is verified against. ~$0.13/M in, $0.40/M out, 131K ctx.
+# Default model: Gemma 4 31B (paid) via OpenRouter.
+# ~$0.13/M in, $0.38/M out.  At ~1K tokens per chat turn that's ~$0.0005
+# per question, so $1 of credit is ~2K turns.
+#
+# Why not nousresearch/hermes-4-70b (the obvious "match the framework"
+# choice)?  Verified against OpenRouter's /api/v1/models on 2026-04-21:
+# none of the nousresearch/hermes-* models advertise the `tools`
+# parameter, so OpenRouter returns 404 "No endpoints found that support
+# tool use" the moment the agent sends MCP tools — which it always
+# does.
+#
+# Why not the free tier (google/gemma-4-31b-it:free)?  Hit HTTP 429 on
+# the first request — free tier is far too rate-limited for an
+# interactive agent that may issue several tool calls per turn.
+#
+# Swap candidates if Gemma 4 latency/quality is insufficient
+# (cheap → expensive):
+#   google/gemini-2.0-flash-lite-001   ($0.07/$0.30 per 1M)
+#   google/gemini-2.5-flash-lite       ($0.10/$0.40 per 1M)
+#   openai/gpt-4o-mini                 ($0.15/$0.60 per 1M)
+#   anthropic/claude-3.5-haiku         ($0.80/$4.00 per 1M, best tools)
 
-model: openrouter/nousresearch/hermes-4-70b
+model:
+  provider: openrouter
+  default: google/gemma-4-31b-it
 
 terminal:
   backend: local
