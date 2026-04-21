@@ -2,7 +2,7 @@
 FROM python:3.12-slim
 
 # Bump CACHE_BUST when you need Railway to skip a stale Docker layer cache.
-ARG CACHE_BUST=1
+ARG CACHE_BUST=3
 RUN true
 
 WORKDIR /app
@@ -30,6 +30,12 @@ RUN pip install --no-cache-dir \
       "httpx>=0.27"
 
 # Copy our MCP server, baked Hermes config, and entrypoint.
+#
+# Build context is the agent/ directory itself.  Locally:
+#   docker build -t algo-fun-agent:dev ./agent
+# On Railway: deploy with `cd agent && railway up --service agent`
+# (railway.json at the upload root takes care of the rest).  Do NOT set
+# RAILWAY_DOCKERFILE_PATH — Railway will auto-detect this Dockerfile.
 COPY mcp_server.py /app/mcp_server.py
 COPY config.yaml   /app/config.yaml
 COPY entrypoint.sh /app/entrypoint.sh

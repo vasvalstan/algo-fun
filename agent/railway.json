@@ -1,0 +1,22 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "_note": [
+    "Required Railway env var: PORT=8642.",
+    "Without PORT, Railway's healthcheck does not know which port to hit",
+    "and falls back to a default that doesn't match Hermes' API_SERVER_PORT,",
+    "so /health is unreachable and the deploy is marked FAILED even though",
+    "the container is actually serving correctly inside.",
+    "Set PORT=8642 (matches API_SERVER_PORT in entrypoint.sh + EXPOSE in Dockerfile)."
+  ],
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile"
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 300,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5
+  }
+}

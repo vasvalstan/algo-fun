@@ -12,13 +12,19 @@ set -euo pipefail
 HERMES_HOME="${HERMES_HOME:-/data/.hermes}"
 mkdir -p "$HERMES_HOME"
 
-# Seed config.yaml only on first boot. After that the operator can edit
-# it via `hermes config edit` or `hermes config set` and changes survive
-# redeploys.
-if [ ! -f "$HERMES_HOME/config.yaml" ]; then
-  echo "[entrypoint] Seeding $HERMES_HOME/config.yaml from /app/config.yaml"
-  cp /app/config.yaml "$HERMES_HOME/config.yaml"
-fi
+# Always overwrite config.yaml from the image.
+#
+# config.yaml is canonical in git (agent/config.yaml) and shipped in the
+# Docker image at /app/config.yaml. The previous "seed-only-once" logic
+# meant a redeploy with updated config (model swap, MCP server change,
+# tool toggle) had no effect because the persistent volume kept the old
+# version. Always overwriting matches our deploy-from-git workflow.
+#
+# Trade-off: any in-place edits the operator made via `hermes config
+# edit` would be lost on redeploy. We don't use that workflow — every
+# change goes through git → docker build → railway up.
+echo "[entrypoint] Syncing $HERMES_HOME/config.yaml from /app/config.yaml"
+cp /app/config.yaml "$HERMES_HOME/config.yaml"
 
 # Always overwrite .env from env vars (idempotent secret rotation).
 #

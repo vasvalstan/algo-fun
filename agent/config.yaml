@@ -47,9 +47,15 @@ tools:
     - delegate_tool
 
 mcp_servers:
+  # Launched by Hermes as a stdio MCP subprocess. We run the script
+  # directly because `python -m fastmcp` doesn't work — the `fastmcp`
+  # package doesn't ship a __main__ module (verified on 2026-04-21,
+  # fastmcp >=0.4 from PyPI). Our mcp_server.py ends with
+  # `if __name__ == "__main__": mcp.run()` so it's already a runnable
+  # entrypoint that speaks stdio MCP.
   algo-fun-trading:
     command: python
-    args: ["-m", "fastmcp", "run", "/app/mcp_server.py"]
+    args: ["/app/mcp_server.py"]
     env:
       ALGOFUN_BACKEND_URL: ${ALGOFUN_BACKEND_URL}
       TRADE_API_SECRET: ${TRADE_API_SECRET}
