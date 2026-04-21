@@ -97,6 +97,24 @@ TRADE_APPROVAL_TIMEOUT: int = int(os.getenv("TRADE_APPROVAL_TIMEOUT", "300"))
 TRADE_API_SECRET: str = os.getenv("TRADE_API_SECRET", "")
 # Optional: protect /api/strategy-config/* and chat; falls back to TRADE_API_SECRET in main if unset.
 STRATEGY_CHAT_SECRET: str = os.getenv("STRATEGY_CHAT_SECRET", "")
+
+# ─── Hermes Agent (web chat reverse proxy) ─────────────────────────────
+# AGENT_CHAT_TOKEN: shared secret for the Hermes web chat surface.
+#   - Browser → backend  : sends as `Authorization: Bearer <token>`.
+#   - Backend  → agent   : injected into `Authorization: Bearer <token>`
+#                          on the upstream `/v1/chat/completions` call
+#                          (Hermes' api_server requires API_SERVER_KEY
+#                          when bound to 0.0.0.0).
+# Same value is set on both the backend and agent Railway services.
+AGENT_CHAT_TOKEN: str = (os.getenv("AGENT_CHAT_TOKEN") or "").strip()
+
+# AGENT_INTERNAL_URL: where the agent service listens on Railway's
+# private network. For local development point at the docker container,
+# e.g. AGENT_INTERNAL_URL=http://127.0.0.1:8642
+AGENT_INTERNAL_URL: str = (
+    os.getenv("AGENT_INTERNAL_URL")
+    or "http://agent.railway.internal:8642"
+).rstrip("/")
 # Strategy chat LLM: set GEMINI_API_KEY or GOOGLE_API_KEY (preferred if set), else OPENAI_API_KEY.
 MAX_PENDING_TRADES: int = int(os.getenv("MAX_PENDING_TRADES", "5"))
 MAX_TRADE_SIZE_USDT: float = float(os.getenv("MAX_TRADE_SIZE_USDT", "500"))
