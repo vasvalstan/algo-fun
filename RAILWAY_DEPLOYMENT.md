@@ -210,29 +210,81 @@ cd frontend && railway up --service frontend
 
 ---
 
-## OpenClaw Service (AI Agent — Optional)
+## Hermes Agent Service
 
-A third Railway service that runs OpenClaw with Gemma 4, connected to the backend via MCP.
+The Hermes agent (NousResearch) replaces the previous OpenClaw service. It
+runs as a third Railway service with a persistent Volume for state, and is
+reached two ways:
 
-**Source**: `openclaw/` subdirectory  
-**Dockerfile**: `openclaw/Dockerfile`
+1. **Telegram** — Hermes auto-enables its Telegram gateway when
+   `TELEGRAM_BOT_TOKEN` is present.
+2. **Web chat** — Hermes' built-in OpenAI-compatible `api_server` listens
+   on the Railway private network. The FastAPI backend exposes
+   `/api/agent/chat/completions` as a thin reverse proxy that the
+   `/chat` page in the frontend speaks to (SSE streaming).
 
-**Required env vars:**
+```
+Browser ──https──▶ frontend (Nginx)
+Browser ──https──▶ backend  (FastAPI)
+                     │
+                     │ POST /api/agent/chat/completions  (SSE)
+                     ▼
+                 agent.railway.internal:8642  (Hermes api_server)
+                     │
+                     │ MCP stdio
+                     ▼
+                 algo-fun-trading MCP (in-process, calls backend HTTP API)
+```
+
+**Source**: `agent/` subdirectory
+**Dockerfile**: `agent/Dockerfile`
+
+### Volume
+
+Mount a Railway Volume at `/data`. Hermes stores its `.env`, `config.yaml`,
+sqlite ledger, and rolling logs under `/data/.hermes/` (set via
+`HERMES_HOME=/data/.hermes` in the Dockerfile).
+
+### Required env vars on the agent service
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
-| `GEMINI_API_KEY` | Google AI API key | Powers Gemma 4 model |
-| `TELEGRAM_BOT_TOKEN` | Second bot token | OpenClaw's Telegram bot (separate from notification bot) |
-| `ALGOFUN_BACKEND_URL` | `https://backend-production-XXXX.up.railway.app` | Backend API for MCP skill |
-| `TRADE_API_SECRET` | Same as backend | Authenticates trade requests |
+| `OPENROUTER_API_KEY` | OpenRouter key | Powers `openrouter/nousresearch/hermes-4-70b` (default) |
+| `AGENT_CHAT_TOKEN` | Strong random string (e.g. `openssl rand -hex 32`) | Doubles as `API_SERVER_KEY` for Hermes' web API; web chat clients send it as `Authorization: Bearer <token>` |
+| `TELEGRAM_BOT_TOKEN` | Second bot token (separate from the notification bot) | Hermes' Telegram gateway |
+| `TELEGRAM_ALLOWED_USERS` | Comma-separated Telegram user IDs | Whitelist for Telegram chat |
+| `ALGOFUN_BACKEND_URL` | `https://backend-production-XXXX.up.railway.app` | Backend API the MCP server calls |
+| `TRADE_API_SECRET` | Same value as on the backend | Authenticates trade requests |
 
-**Deploy:**
+> The entrypoint (`agent/entrypoint.sh`) writes these into
+> `$HERMES_HOME/.env` on every boot, so secret rotation just requires
+> updating the Railway env var and redeploying — no SSH/volume editing.
+
+### Required env vars on the backend service (for the proxy)
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `AGENT_CHAT_TOKEN` | Same value as on the agent service | Validates inbound web-chat requests and is injected as the upstream `Authorization` header to Hermes |
+| `AGENT_INTERNAL_URL` | `http://agent.railway.internal:8642` (default) | Where the proxy forwards to; only override for non-Railway environments |
+
+### Deploy
 
 ```bash
-cd openclaw && railway up --service openclaw
+cd agent && railway up --service agent
 ```
 
-> You need **two Telegram bots**: one for trade notifications/approvals (runs in FastAPI backend), and one for OpenClaw's natural language agent. Both can be in the same group chat.
+No public domain is required for the agent service — the backend is its
+only client and uses the private Railway hostname.
+
+### Frontend
+
+`/chat` is bundled with the frontend automatically. On first load it
+prompts for `AGENT_CHAT_TOKEN` (stored only in this browser's
+localStorage). No new env vars on the frontend service.
+
+> You need **two Telegram bots**: one for trade notifications/approvals
+> (runs inside the FastAPI backend), and one for Hermes' natural-language
+> agent. Both can sit in the same group chat.
 
 ---
 
@@ -240,5 +292,6 @@ cd openclaw && railway up --service openclaw
 
 - **Backend env var change** → Railway auto-redeploys backend. Frontend is unaffected (connects via public URL).
 - **Frontend env var change** → If it's a `VITE_*` var, you must redeploy (it's baked at build time). Non-VITE vars take effect on restart.
-- **OpenClaw env var change** → Railway auto-redeploys. No impact on backend or frontend.
+- **Agent env var change** → Railway auto-redeploys agent. Backend/frontend unaffected; the proxy connects via private hostname so no IP-cache issue.
+- **Rotating `AGENT_CHAT_TOKEN`** → Update on **both** the backend and agent services together (they must match), then redeploy both. Web chat users will need to re-enter the new token on `/chat`.
 - **Code change** → Push or manually trigger deploy. No auto-deploy unless connected to a Git repo.
