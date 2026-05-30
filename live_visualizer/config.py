@@ -12,7 +12,7 @@ class Settings:
     refresh_interval_ms: int = int(os.getenv("VIS_REFRESH_INTERVAL_MS", "1000"))
     state_file_path: str = os.getenv("VIS_STATE_FILE", "")
     state_api_url: str = os.getenv("VIS_STATE_API_URL", "")
-    binance_ws_base: str = os.getenv("VIS_BINANCE_WS_BASE", "wss://stream.binance.com:443")
+    binance_ws_base: str = os.getenv("VIS_BINANCE_WS_BASE", "wss://data-stream.binance.vision")
     host: str = os.getenv("VIS_HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", os.getenv("VIS_PORT", "8080")))
 
