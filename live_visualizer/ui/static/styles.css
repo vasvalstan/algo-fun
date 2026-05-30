@@ -128,6 +128,26 @@ h2 {
   text-align: center;
 }
 
+.tf-bar {
+  display: flex;
+  gap: 4px;
+}
+
+.tf {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 8px;
+  transition: all 0.15s;
+}
+
+.tf:hover { border-color: var(--blue); color: var(--text); }
+.tf.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+
 .legend {
   display: flex;
   flex-wrap: wrap;

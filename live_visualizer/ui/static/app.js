@@ -162,12 +162,13 @@ function updateCandle(candle) {
   }
 }
 
-// ── Server polling (bot state) ─────────────────────────────────────────────
+// ── Server polling (pullback strategy state) ───────────────────────────────
 async function pollServer() {
   try {
     const data = await fetch("/api/snapshot").then(r => r.json());
-    botState = data.bot_state || {};
-    stateSource = data.state_source || {};
+    // /api/snapshot now returns pullback state directly
+    botState = data;
+    stateSource = { source: "pullback_v1", last_ok_at: data.updated_at, last_error: "" };
     renderState();
     renderSource();
     drawChart();
@@ -204,12 +205,16 @@ function renderPrices() {
 
 function renderState() {
   const regime = botState.regime || "UNKNOWN";
+  const bias   = botState.daily_bias || "";
   const regimeEl = document.getElementById("regime");
-  regimeEl.textContent = regime;
-  regimeEl.style.background = regime === "BULL" ? "#0ecb81" : regime === "BEAR" ? "#f6465d" : "#64748b";
+  regimeEl.textContent = bias ? `${regime} · ${bias}` : regime;
+  regimeEl.style.background =
+    regime === "BULL"  ? "#0ecb81" :
+    regime === "BEAR"  ? "#f6465d" :
+    regime === "CRASH" ? "#7c3aed" : "#64748b";
 
-  setText("mode", botState.current_mode || "--");
-  setText("gear", botState.gear || "--");
+  setText("mode", `RSI ${botState.rsi_5m ?? "--"}`);
+  setText("gear", `ATR ${botState.atr_5m ?? "--"}`);
   setText("cash", money(botState.cash));
   setText("inventory", botState.position_qty ? `${qtyFmt.format(botState.position_qty)} BTC` : "--");
   setText("realized", money(botState.pnl_realized));
@@ -255,10 +260,14 @@ function renderBags(bags) {
 }
 
 function renderSource() {
-  const source = stateSource.source || "No state source configured";
-  const lastOk = stateSource.last_ok_at ? new Date(stateSource.last_ok_at * 1000).toLocaleTimeString() : "never";
-  const err = stateSource.last_error ? ` · ${stateSource.last_error}` : "";
-  document.getElementById("source").textContent = `${source} · last ok ${lastOk}${err}`;
+  const updatedAt = botState.updated_at
+    ? new Date(botState.updated_at * 1000).toLocaleTimeString()
+    : "never";
+  const capital = botState.capital_total
+    ? `$${fmt.format(botState.capital_total)} capital · $${fmt.format(botState.capital_free || 0)} free`
+    : "";
+  document.getElementById("source").textContent =
+    `pullback_v1 · ${capital} · updated ${updatedAt}`;
 }
 
 // ── Chart drawing ──────────────────────────────────────────────────────────

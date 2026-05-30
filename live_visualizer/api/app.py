@@ -1,34 +1,65 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from live_visualizer.config import settings
-from live_visualizer.state.reader import SharedStateReader
+from live_visualizer.runners.pullback_runner import run_pullback_loop, get_state as _pullback_state
 
 log = logging.getLogger(__name__)
 
-state_reader = SharedStateReader(
-    symbol=settings.symbol,
-    file_path=settings.state_file_path,
-    api_url=settings.state_api_url,
+UI_DIR = Path(__file__).resolve().parents[1] / "ui"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start the pullback paper strategy runner
+    task = asyncio.create_task(
+        run_pullback_loop(symbol=settings.symbol, capital=5_000.0),
+        name="pullback_v1",
+    )
+    log.info("pullback_v1 paper strategy started")
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="Algo Fun Live Visualizer", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-app = FastAPI(title="Algo Fun Live BTC/USDC Visualizer")
-
-UI_DIR = Path(__file__).resolve().parents[1] / "ui"
-app.mount("/static", StaticFiles(directory=str(UI_DIR / "static")), name="static")
+_static_dir = UI_DIR / "static"
+if _static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
-    return (UI_DIR / "index.html").read_text(encoding="utf-8")
+    p = UI_DIR / "index.html"
+    if p.exists():
+        return p.read_text(encoding="utf-8")
+    return HTMLResponse("<h1>live-visualizer</h1><p>UI not found at " + str(UI_DIR) + "</p>")
+
+
+@app.get("/health")
+async def health() -> dict:
+    return {"status": "ok"}
 
 
 @app.get("/api/config")
@@ -38,30 +69,20 @@ async def config() -> dict:
         "interval": settings.interval,
         "refresh_interval_ms": settings.refresh_interval_ms,
         "binance_ws_base": settings.binance_ws_base,
-        "state_source": settings.state_api_url or settings.state_file_path,
     }
 
 
 @app.get("/api/snapshot")
 async def snapshot() -> dict:
-    return _state_payload()
+    """Full strategy state — polled by the browser every second."""
+    return _pullback_state()
 
 
-@app.websocket("/ws")
-async def ws(websocket: WebSocket) -> None:
-    await websocket.accept()
-    try:
-        while True:
-            await websocket.send_text(json.dumps(_state_payload()))
-            await asyncio.sleep(settings.refresh_interval_ms / 1000)
-    except WebSocketDisconnect:
-        return
-
-
-def _state_payload() -> dict:
-    bot_state = state_reader.read()
-    status = state_reader.status()
+@app.get("/api/ledger")
+async def ledger() -> dict:
+    """Trade ledger + recent log lines."""
+    state = _pullback_state()
     return {
-        "bot_state": bot_state.model_dump(),
-        "state_source": status,
+        "ledger": state.get("ledger", []),
+        "log": state.get("log", []),
     }
