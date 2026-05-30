@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from api import notifications
 from api.ws_manager import WSManager, sender_loop, receiver_loop
+from api.runners.pullback_runner import run_pullback_loop, read_state as _pullback_read_state
 from api.bot_runner import run_bot
 from api.live_grid_runner import run_grid_bot
 from api.paper_runner import run_paper_bot
@@ -68,6 +69,14 @@ def _task_done_callback(task: asyncio.Task) -> None:
 async def lifespan(app: FastAPI):
     global _bot_task, _paper_task, _paper_v2_task, _binance_demo_task, _revolut_live_task
     _lifo_tasks: list[tuple[str, asyncio.Task]] = []
+
+    # ── Pullback paper strategy ──────────────────────────────────────────────
+    _pullback_task = asyncio.create_task(
+        run_pullback_loop(symbol="BTCUSDC", capital=5_000.0),
+        name="pullback_v1",
+    )
+    _pullback_task.add_done_callback(_task_done_callback)
+    log.info("Started pullback_v1 paper strategy runner")
 
     outbound_ip = _detect_outbound_ip()
     log.info("Server outbound IP: %s  — whitelist this in Binance & Revolut", outbound_ip)
@@ -133,6 +142,7 @@ async def lifespan(app: FastAPI):
     # 🧱 LIFO Grid started.
     _mark_lifo_shutdown()
     named_tasks: list[tuple[str, Optional[asyncio.Task]]] = [
+        ("pullback_v1", _pullback_task),
         ("bot", _bot_task),
         ("paper", _paper_task),
         ("paper_v2", _paper_v2_task),
@@ -1065,6 +1075,19 @@ async def exchange_force_buy(venue_label: str, body: ForceBuyBody) -> dict:
         # internal error.
         raise HTTPException(status_code=409, detail=result)
     return result
+
+
+@app.get("/api/pullback/state")
+async def pullback_state() -> dict:
+    """Live state of the pullback_v1 paper strategy."""
+    return _pullback_read_state()
+
+
+@app.get("/api/pullback/ledger")
+async def pullback_ledger() -> dict:
+    """Full trade ledger for the pullback_v1 paper strategy."""
+    state = _pullback_read_state()
+    return {"ledger": state.get("ledger", []), "log": state.get("log", [])}
 
 
 @app.get("/api/status")

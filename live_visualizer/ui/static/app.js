@@ -26,10 +26,12 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 
+const BINANCE_REST = "https://data-api.binance.vision/api/v3";
+
 // ── Binance REST seed ──────────────────────────────────────────────────────
 async function seedCandles() {
   try {
-    const url = `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${CANDLE_LIMIT}`;
+    const url = `${BINANCE_REST}/klines?symbol=${symbol}&interval=${interval}&limit=${CANDLE_LIMIT}`;
     const resp = await fetch(url);
     const rows = await resp.json();
     candles = rows.map(r => ({
@@ -47,15 +49,67 @@ async function seedCandles() {
   }
 }
 
+// ── REST real-time polling (runs every second, always) ─────────────────────
+async function pollBinance() {
+  try {
+    // Fetch current open candle + book ticker in parallel
+    const [klRes, bkRes] = await Promise.all([
+      fetch(`${BINANCE_REST}/klines?symbol=${symbol}&interval=${interval}&limit=1`),
+      fetch(`${BINANCE_REST}/ticker/bookTicker?symbol=${symbol}`),
+    ]);
+    const klines = await klRes.json();
+    const bk = await bkRes.json();
+
+    // Update book
+    if (bk.bidPrice) {
+      book = { bid: parseFloat(bk.bidPrice), ask: parseFloat(bk.askPrice) };
+    }
+
+    // Update only the current open candle (limit=1 returns just the latest)
+    if (Array.isArray(klines) && klines.length) {
+      const k = klines[0];
+      updateCandle({
+        time: Math.floor(k[0] / 1000),
+        open: parseFloat(k[1]),
+        high: parseFloat(k[2]),
+        low: parseFloat(k[3]),
+        close: parseFloat(k[4]),
+        volume: parseFloat(k[5]),
+        closed: false,
+      });
+    }
+
+    if (!feedConnected) {
+      feedConnected = true;
+      setText("feed", "LIVE");
+      document.getElementById("feed").className = "pos";
+    }
+
+    renderPrices();
+    drawChart();
+  } catch (e) {}
+
+  setTimeout(pollBinance, 1000);
+}
+
 // ── Binance WebSocket (browser → Binance directly) ─────────────────────────
+let _binanceWs = null;
+
 function connectBinance() {
+  if (_binanceWs) { _binanceWs.onclose = null; _binanceWs.close(); }
   const sym = symbol.toLowerCase();
+  // Do NOT encodeURIComponent — Binance expects raw @ and / in the streams param
   const streams = `${sym}@kline_${interval}/${sym}@bookTicker`;
-  const url = `${binanceWsBase}?streams=${encodeURIComponent(streams)}`;
+  const url = `${binanceWsBase}?streams=${streams}`;
   const ws = new WebSocket(url);
+  _binanceWs = ws;
 
   ws.onopen = () => { feedConnected = true; renderFeedStatus(); };
-  ws.onclose = () => { feedConnected = false; renderFeedStatus(); setTimeout(connectBinance, 2000); };
+  ws.onclose = () => {
+    feedConnected = false;
+    renderFeedStatus();
+    if (_binanceWs === ws) setTimeout(connectBinance, 2000);
+  };
   ws.onerror = () => ws.close();
 
   ws.onmessage = e => {
@@ -84,6 +138,20 @@ function connectBinance() {
   };
 }
 
+// ── Timeframe switching ────────────────────────────────────────────────────
+function setTimeframe(tf) {
+  interval = tf;
+  candles = [];
+  document.querySelectorAll(".tf").forEach(b => b.classList.toggle("active", b.dataset.tf === tf));
+  seedCandles().then(() => connectBinance());
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll(".tf").forEach(b => {
+    b.addEventListener("click", () => setTimeframe(b.dataset.tf));
+  });
+});
+
 function updateCandle(candle) {
   const last = candles[candles.length - 1];
   if (last && last.time === candle.time) {
@@ -94,20 +162,17 @@ function updateCandle(candle) {
   }
 }
 
-// ── Server WebSocket (bot state) ───────────────────────────────────────────
-function connectServer() {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onmessage = e => {
-    const payload = JSON.parse(e.data);
-    botState = payload.bot_state || {};
-    stateSource = payload.state_source || {};
+// ── Server polling (bot state) ─────────────────────────────────────────────
+async function pollServer() {
+  try {
+    const data = await fetch("/api/snapshot").then(r => r.json());
+    botState = data.bot_state || {};
+    stateSource = data.state_source || {};
     renderState();
     renderSource();
     drawChart();
-  };
-  ws.onclose = () => setTimeout(connectServer, 1000);
-  ws.onerror = () => ws.close();
+  } catch (e) {}
+  setTimeout(pollServer, 1000);
 }
 
 // ── Render helpers ─────────────────────────────────────────────────────────
@@ -219,10 +284,14 @@ function drawChart() {
   const resistance = botState.resistance_level || 0;
   const avgEntry = botState.avg_entry_price || 0;
 
-  const pad = { left: 12, right: 76, top: 18, bottom: 28 };
+  const pad = { left: 12, right: 76, top: 18, bottom: 44 };
   const chartW = width - pad.left - pad.right;
   const chartH = height - pad.top - pad.bottom;
-  const visible = candles.slice(-180);
+
+  // Auto-size: target ~8px per candle so bodies are visible
+  const targetCandleW = 8;
+  const maxVisible = Math.max(10, Math.floor(chartW / targetCandleW));
+  const visible = candles.slice(-maxVisible);
 
   const overlayPrices = [
     ...orders.map(o => o.price),
@@ -236,10 +305,10 @@ function drawChart() {
   const y = price => pad.top + (max - price) / span * chartH;
   const x = i => pad.left + i / Math.max(1, visible.length - 1) * chartW;
 
-  drawGrid(width, height, pad, chartH, min, max, y);
+  drawGrid(width, height, pad, chartH, min, max, y, visible, x);
 
   const step = chartW / Math.max(visible.length, 1);
-  const bodyW = Math.max(2, Math.min(9, step * 0.62));
+  const bodyW = Math.max(3, Math.min(12, step * 0.7));
   visible.forEach((c, i) => {
     const cx = x(i);
     const up = c.close >= c.open;
@@ -256,9 +325,82 @@ function drawChart() {
     ctx.fillRect(cx - bodyW / 2, top, bodyW, Math.max(1, bottom - top));
   });
 
+  // ── Support zones (shaded bands) ──
+  for (const zone of (botState.support_zones || [])) {
+    if (zone.low < min || zone.high > max) continue;
+    const alpha = zone.strength === "strong" ? 0.12 : zone.strength === "moderate" ? 0.07 : 0.04;
+    ctx.save();
+    ctx.fillStyle = `rgba(34,197,94,${alpha})`;
+    ctx.fillRect(pad.left, y(zone.high), chartW, y(zone.low) - y(zone.high));
+    ctx.strokeStyle = `rgba(34,197,94,${alpha * 2})`;
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(pad.left, y(zone.high), chartW, y(zone.low) - y(zone.high));
+    ctx.fillStyle = "rgba(34,197,94,0.5)";
+    ctx.font = "10px system-ui";
+    ctx.fillText(`S ${zone.strength}`, pad.left + 4, y(zone.high) - 3);
+    ctx.restore();
+  }
+
+  // ── Resistance zones (shaded bands) ──
+  for (const zone of (botState.resistance_zones || [])) {
+    if (zone.low < min || zone.high > max) continue;
+    ctx.save();
+    ctx.fillStyle = "rgba(246,70,93,0.06)";
+    ctx.fillRect(pad.left, y(zone.high), chartW, y(zone.low) - y(zone.high));
+    ctx.strokeStyle = "rgba(246,70,93,0.15)";
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(pad.left, y(zone.high), chartW, y(zone.low) - y(zone.high));
+    ctx.restore();
+  }
+
   if (support) drawPriceLine("Support", support, "#22c55e", y, pad, width);
   if (resistance) drawPriceLine("Resistance", resistance, "#f6465d", y, pad, width);
   if (avgEntry) drawPriceLine("Avg Entry", avgEntry, "#f0b90b", y, pad, width);
+
+  // ── SL lines (one per open tranche) ──
+  for (const sl of (botState.sl_lines || [])) {
+    drawPriceLine(sl.label, sl.price, "#f6465d", y, pad, width, true);
+  }
+
+  // ── Current price label (Binance-style) ──
+  const lastCandle = visible[visible.length - 1];
+  if (lastCandle) {
+    const price = lastCandle.close;
+    const prevClose = visible.length > 1 ? visible[visible.length - 2].close : price;
+    const isUp = price >= prevClose;
+    const color = isUp ? "#0ecb81" : "#f6465d";
+    const yy = y(price);
+
+    // Dashed line across chart
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, yy);
+    ctx.lineTo(width - pad.right, yy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Price box on right axis
+    const label = fmt.format(price);
+    ctx.font = "bold 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+    const textW = ctx.measureText(label).width;
+    const boxW = textW + 12;
+    const boxH = 18;
+    const boxX = width - pad.right + 1;
+    const boxY = yy - boxH / 2;
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(boxX, boxY, boxW, boxH, 3);
+    ctx.fill();
+
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "left";
+    ctx.fillText(label, boxX + 6, yy + 4);
+    ctx.restore();
+  }
 
   for (const o of orders) {
     drawPriceLine(`${o.side} ${o.label || ""}`.trim(), o.price, o.side === "BUY" ? "#22c55e" : "#f97316", y, pad, width, true);
@@ -269,11 +411,31 @@ function drawChart() {
   }
 }
 
-function drawGrid(width, height, pad, chartH, min, max, y) {
-  ctx.strokeStyle = "#151b23";
-  ctx.fillStyle = "#8b949e";
-  ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+function formatTimeLabel(ts) {
+  const d = new Date(ts * 1000);
+  if (interval === "1d") {
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+  if (interval === "4h" || interval === "1h") {
+    const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+    // Show date when it's midnight, otherwise just time
+    return d.getHours() === 0 && d.getMinutes() === 0 ? date : time;
+  }
+  // 1m, 5m, 15m — show date when day changes, otherwise HH:MM
+  const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const isNewDay = d.getHours() === 0 && d.getMinutes() < (interval === "15m" ? 15 : interval === "5m" ? 5 : 1);
+  return isNewDay ? d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : time;
+}
+
+function drawGrid(width, height, pad, chartH, min, max, y, visible, x) {
+  const monoFont = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.lineWidth = 1;
+
+  // ── Horizontal price lines ──
+  ctx.strokeStyle = "#1a2030";
+  ctx.fillStyle = "#8b949e";
+  ctx.font = monoFont;
   for (let i = 0; i <= 5; i++) {
     const price = min + (max - min) * (i / 5);
     const yy = y(price);
@@ -283,8 +445,50 @@ function drawGrid(width, height, pad, chartH, min, max, y) {
     ctx.stroke();
     ctx.fillText(fmt.format(price), width - pad.right + 8, yy + 4);
   }
+
+  // ── Time axis ──
+  const chartW = width - pad.left - pad.right;
+  const minLabelGap = 80; // px between labels
+  const maxLabels = Math.floor(chartW / minLabelGap);
+  const step = Math.max(1, Math.floor(visible.length / maxLabels));
+
+  // Find label candidates — every `step` candles, prefer round times
+  const labelIndices = [];
+  for (let i = 0; i < visible.length; i++) {
+    if (i % step === 0) labelIndices.push(i);
+  }
+
+  ctx.fillStyle = "#8b949e";
+  ctx.font = monoFont;
+  ctx.textAlign = "center";
+
+  for (const i of labelIndices) {
+    const cx = x(i);
+    const label = formatTimeLabel(visible[i].time);
+
+    // Vertical grid line
+    ctx.strokeStyle = "#1a2030";
+    ctx.beginPath();
+    ctx.moveTo(cx, pad.top);
+    ctx.lineTo(cx, pad.top + chartH);
+    ctx.stroke();
+
+    // Tick mark
+    ctx.strokeStyle = "#29313d";
+    ctx.beginPath();
+    ctx.moveTo(cx, pad.top + chartH);
+    ctx.lineTo(cx, pad.top + chartH + 5);
+    ctx.stroke();
+
+    // Label
+    ctx.fillText(label, cx, pad.top + chartH + 18);
+  }
+
+  ctx.textAlign = "left";
+
+  // ── Border ──
   ctx.strokeStyle = "#29313d";
-  ctx.strokeRect(pad.left, pad.top, width - pad.left - pad.right, chartH);
+  ctx.strokeRect(pad.left, pad.top, chartW, chartH);
 }
 
 function drawPriceLine(label, price, color, y, pad, width, dashed = false) {
@@ -331,8 +535,9 @@ async function boot() {
   } catch (e) {}
 
   await seedCandles();
-  connectBinance();
-  connectServer();
+  pollBinance();    // REST every 1s — always works
+  connectBinance(); // WebSocket — instant updates if available
+  pollServer();     // Bot state every 1s
 }
 
 boot();

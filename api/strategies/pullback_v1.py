@@ -1,0 +1,519 @@
+"""
+Trend-Filtered Pullback Strategy v1
+====================================
+Multi-timeframe analysis:
+  Weekly       → big regime  (BULL / BEAR / SIDEWAYS / CRASH)
+  Daily        → bias        (BULLISH / SIDEWAYS / BEARISH)
+  1H           → support + resistance zones
+  5M           → precise entry / exit
+
+Capital  : 5 000 USDC, tranches of 1 000 USDC each
+TP       : +0.15 % from entry
+SL       : support_low − ATR(14)×0.5
+Fee      : 0 % (paper)
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import asdict, dataclass, field
+from typing import List, Optional, Tuple
+
+log = logging.getLogger(__name__)
+
+
+# ─────────────────────────────── data classes ────────────────────────────────
+
+@dataclass
+class Candle:
+    time: int          # unix seconds (open time)
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+@dataclass
+class SupportZone:
+    low: float
+    high: float
+    touches: int
+    last_touch_time: int
+    strength: str = "weak"   # weak / moderate / strong
+
+    @property
+    def mid(self) -> float:
+        return (self.low + self.high) / 2
+
+    def to_dict(self) -> dict:
+        return {
+            "low": round(self.low, 2),
+            "high": round(self.high, 2),
+            "mid": round(self.mid, 2),
+            "touches": self.touches,
+            "strength": self.strength,
+        }
+
+
+@dataclass
+class Tranche:
+    id: str
+    state: str          # PENDING | OPEN | CLOSED | STOPPED | CANCELLED
+    order_price: float
+    entry_price: float
+    qty: float
+    tp_price: float
+    sl_price: float
+    entry_time: int
+    exit_time: Optional[int] = None
+    exit_price: Optional[float] = None
+    pnl: float = 0.0
+    reason: str = ""
+
+    def unrealized_pnl(self, price: float) -> float:
+        if self.state != "OPEN":
+            return 0.0
+        return (price - self.entry_price) * self.qty
+
+    def to_dict(self, price: float) -> dict:
+        return {
+            "id": self.id,
+            "state": self.state,
+            "order_price": round(self.order_price, 2),
+            "entry_price": round(self.entry_price, 2),
+            "qty": round(self.qty, 8),
+            "tp_price": round(self.tp_price, 2),
+            "sl_price": round(self.sl_price, 2),
+            "entry_time": self.entry_time,
+            "exit_time": self.exit_time,
+            "exit_price": round(self.exit_price, 2) if self.exit_price else None,
+            "pnl": round(self.pnl, 4),
+            "unrealized_pnl": round(self.unrealized_pnl(price), 4),
+            "reason": self.reason,
+        }
+
+
+@dataclass
+class LedgerEntry:
+    id: int
+    tranche_id: str
+    side: str           # BUY | SELL
+    price: float
+    qty: float
+    usdc: float
+    timestamp: int
+    pnl: float
+    reason: str         # ENTRY | TP | SL | CANCELLED
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+# ─────────────────────────────── helpers ─────────────────────────────────────
+
+def _sma(data: List[float], period: int) -> List[float]:
+    out = []
+    for i in range(len(data)):
+        if i < period - 1:
+            out.append(float("nan"))
+        else:
+            out.append(sum(data[i - period + 1 : i + 1]) / period)
+    return out
+
+
+def _rsi(closes: List[float], period: int = 14) -> float:
+    if len(closes) < period + 1:
+        return 50.0
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0.0))
+        losses.append(max(-d, 0.0))
+    ag = sum(gains[-period:]) / period
+    al = sum(losses[-period:]) / period
+    if al == 0:
+        return 100.0
+    return 100.0 - 100.0 / (1.0 + ag / al)
+
+
+def _atr(candles: List[Candle], period: int = 14) -> float:
+    if len(candles) < 2:
+        return 0.0
+    trs = []
+    for i in range(1, len(candles)):
+        tr = max(
+            candles[i].high - candles[i].low,
+            abs(candles[i].high - candles[i - 1].close),
+            abs(candles[i].low  - candles[i - 1].close),
+        )
+        trs.append(tr)
+    return sum(trs[-period:]) / min(period, len(trs))
+
+
+# ─────────────────────────────── strategy ────────────────────────────────────
+
+class PullbackStrategyV1:
+    TRANCHE_USDC   = 1_000.0
+    TP_PCT         = 0.0015    # 0.15 %
+    ATR_SL_MULT    = 0.5       # SL = support_low − ATR×0.5
+    RSI_THRESHOLD  = 45        # must be below this to enter
+    PIVOT_BARS     = 3         # bars each side for pivot detection
+    ZONE_TOL_PCT   = 0.003     # group pivots within 0.3 %
+    ATR_PERIOD     = 14
+
+    def __init__(self, symbol: str = "BTCUSDC", capital: float = 5_000.0):
+        self.symbol  = symbol
+        self.capital = capital
+
+        self.tranches: List[Tranche]       = []
+        self.ledger:   List[LedgerEntry]   = []
+        self._counter  = 0
+
+        self.regime      = "UNKNOWN"
+        self.daily_bias  = "UNKNOWN"
+        self.support_zones:    List[SupportZone] = []
+        self.resistance_zones: List[SupportZone] = []
+
+        self.current_price = 0.0
+        self.atr_5m        = 0.0
+        self.rsi_5m        = 50.0
+        self._log_lines: List[str] = []
+
+    # ── capital ──────────────────────────────────────────────────────────────
+
+    def _deployed(self) -> float:
+        return sum(
+            t.order_price * t.qty
+            for t in self.tranches
+            if t.state in ("PENDING", "OPEN")
+        )
+
+    def _free(self) -> float:
+        return max(0.0, self.capital - self._deployed())
+
+    # ── regime ───────────────────────────────────────────────────────────────
+
+    def _detect_regime(
+        self,
+        weekly: List[Candle],
+        daily:  List[Candle],
+    ) -> Tuple[str, str]:
+        regime     = "SIDEWAYS"
+        daily_bias = "SIDEWAYS"
+
+        if len(weekly) >= 20:
+            wc   = [c.close for c in weekly]
+            ma20 = _sma(wc, 20)
+            ma50 = _sma(wc, min(50, len(wc)))
+            cur, m20, m50 = wc[-1], ma20[-1], ma50[-1]
+
+            # crash: price down >8 % from 4-week high
+            hi4 = max(c.high for c in weekly[-4:])
+            if cur < hi4 * 0.92:
+                regime = "CRASH"
+            elif m50 == m50 and cur > m20 and m20 > m50:   # nan-safe
+                regime = "BULL"
+            elif m50 == m50 and cur < m20 and m20 < m50:
+                regime = "BEAR"
+            else:
+                regime = "SIDEWAYS"
+
+        if len(daily) >= 20:
+            dc  = [c.close for c in daily]
+            m20 = _sma(dc, 20)
+            cur, m, pm = dc[-1], m20[-1], m20[-2] if len(m20) >= 2 else m20[-1]
+            if cur > m and m > pm:
+                daily_bias = "BULLISH"
+            elif cur < m and m < pm:
+                daily_bias = "BEARISH"
+            else:
+                daily_bias = "SIDEWAYS"
+
+        return regime, daily_bias
+
+    # ── zones ─────────────────────────────────────────────────────────────────
+
+    def _find_zones(
+        self, hourly: List[Candle]
+    ) -> Tuple[List[SupportZone], List[SupportZone]]:
+        n = self.PIVOT_BARS
+        supports:    List[SupportZone] = []
+        resistances: List[SupportZone] = []
+
+        for i in range(n, len(hourly) - n):
+            c = hourly[i]
+
+            # pivot low → support
+            if all(c.low <= hourly[i - j].low for j in range(1, n + 1)) and \
+               all(c.low <= hourly[i + j].low for j in range(1, n + 1)):
+                self._merge_zone(supports, c.low, c.low * 1.002, c.time, is_support=True)
+
+            # pivot high → resistance
+            if all(c.high >= hourly[i - j].high for j in range(1, n + 1)) and \
+               all(c.high >= hourly[i + j].high for j in range(1, n + 1)):
+                self._merge_zone(resistances, c.high * 0.998, c.high, c.time, is_support=False)
+
+        for z in supports + resistances:
+            z.strength = "strong" if z.touches >= 3 else "moderate" if z.touches >= 2 else "weak"
+
+        cur = self.current_price or 1.0
+        sup = sorted([z for z in supports    if z.low  < cur], key=lambda z: abs(z.low  - cur))
+        res = sorted([z for z in resistances if z.high > cur], key=lambda z: abs(z.high - cur))
+        return sup[:10], res[:5]
+
+    @staticmethod
+    def _merge_zone(
+        zones: List[SupportZone],
+        low: float, high: float, ts: int,
+        is_support: bool,
+    ) -> None:
+        anchor = low if is_support else high
+        for z in zones:
+            ref = z.low if is_support else z.high
+            if abs(anchor - ref) / ref < PullbackStrategyV1.ZONE_TOL_PCT:
+                z.low  = min(z.low,  low)
+                z.high = max(z.high, high)
+                z.touches += 1
+                z.last_touch_time = max(z.last_touch_time, ts)
+                return
+        zones.append(SupportZone(low=low, high=high, touches=1, last_touch_time=ts))
+
+    # ── entry / exit ─────────────────────────────────────────────────────────
+
+    def _check_entry(self, candles_5m: List[Candle]) -> Optional[dict]:
+        """Return entry spec dict or None."""
+        if self.regime in ("CRASH", "BEAR"):
+            return None
+        if self.regime == "SIDEWAYS" and self.daily_bias == "BEARISH":
+            return None
+        if self._free() < self.TRANCHE_USDC:
+            return None
+        if len(candles_5m) < 30:
+            return None
+
+        closes = [c.close for c in candles_5m]
+        self.rsi_5m = _rsi(closes, 14)
+
+        if self.rsi_5m >= self.RSI_THRESHOLD:
+            return None
+
+        # momentum flip: last close > prev close
+        if candles_5m[-1].close <= candles_5m[-2].close:
+            return None
+
+        price = self.current_price
+        for zone in self.support_zones:
+            lower = zone.low  * 0.997
+            upper = zone.high * 1.003
+            if not (lower <= price <= upper):
+                continue
+
+            # don't double-enter same zone
+            if any(
+                t.state in ("PENDING", "OPEN")
+                and abs(t.order_price - zone.low) / zone.low < 0.005
+                for t in self.tranches
+            ):
+                continue
+
+            buy   = zone.low
+            tp    = buy * (1.0 + self.TP_PCT)
+            sl    = zone.low - self.atr_5m * self.ATR_SL_MULT
+            return {"buy_price": buy, "tp_price": tp, "sl_price": sl, "zone": zone}
+
+        return None
+
+    # ── tranche lifecycle ─────────────────────────────────────────────────────
+
+    def _open_tranche(self, spec: dict) -> Tranche:
+        self._counter += 1
+        tid = f"T{self._counter:04d}"
+        bp  = spec["buy_price"]
+        qty = self.TRANCHE_USDC / bp
+        t   = Tranche(
+            id=tid, state="PENDING",
+            order_price=bp, entry_price=bp, qty=qty,
+            tp_price=spec["tp_price"], sl_price=spec["sl_price"],
+            entry_time=int(time.time()),
+        )
+        self.tranches.append(t)
+        self._emit(f"[{tid}] PENDING BUY limit @ {bp:.2f}  TP={t.tp_price:.2f}  SL={t.sl_price:.2f}")
+        return t
+
+    def _fill(self, t: Tranche, price: float) -> None:
+        t.state       = "OPEN"
+        t.entry_price = price
+        t.entry_time  = int(time.time())
+        self._counter += 1
+        self.ledger.append(LedgerEntry(
+            id=self._counter, tranche_id=t.id,
+            side="BUY", price=price, qty=t.qty,
+            usdc=price * t.qty, timestamp=t.entry_time,
+            pnl=0.0, reason="ENTRY",
+        ))
+        self._emit(f"[{t.id}] FILLED BUY @ {price:.2f}  qty={t.qty:.6f} BTC")
+
+    def _close(self, t: Tranche, price: float, reason: str) -> None:
+        pnl          = (price - t.entry_price) * t.qty
+        t.state      = "CLOSED" if reason == "TP" else "STOPPED"
+        t.exit_price = price
+        t.exit_time  = int(time.time())
+        t.pnl        = pnl
+        t.reason     = reason
+        self._counter += 1
+        self.ledger.append(LedgerEntry(
+            id=self._counter, tranche_id=t.id,
+            side="SELL", price=price, qty=t.qty,
+            usdc=price * t.qty, timestamp=t.exit_time,
+            pnl=round(pnl, 4), reason=reason,
+        ))
+        self._emit(f"[{t.id}] SELL {reason} @ {price:.2f}  PnL={pnl:+.4f} USDC")
+
+    def _cancel(self, t: Tranche, reason: str) -> None:
+        t.state  = "CANCELLED"
+        t.reason = reason
+        self._emit(f"[{t.id}] CANCELLED — {reason}")
+
+    def _manage(self, price: float) -> None:
+        for t in self.tranches:
+            if t.state == "PENDING":
+                if price <= t.order_price:
+                    self._fill(t, t.order_price)
+                elif price <= t.sl_price:
+                    self._cancel(t, "SL_BREAK_BEFORE_FILL")
+            elif t.state == "OPEN":
+                if price >= t.tp_price:
+                    self._close(t, t.tp_price, "TP")
+                elif price <= t.sl_price:
+                    self._close(t, t.sl_price, "SL")
+
+    # ── main tick ─────────────────────────────────────────────────────────────
+
+    def tick(
+        self,
+        candles_5m:  List[Candle],
+        candles_1h:  List[Candle],
+        candles_daily:  List[Candle],
+        candles_weekly: List[Candle],
+        price: float,
+    ) -> List[str]:
+        self.current_price = price
+        self._log_lines.clear()
+
+        if candles_5m:
+            self.atr_5m = _atr(candles_5m, self.ATR_PERIOD)
+
+        self.regime, self.daily_bias = self._detect_regime(candles_weekly, candles_daily)
+
+        if candles_1h:
+            self.support_zones, self.resistance_zones = self._find_zones(candles_1h)
+
+        self._manage(price)
+
+        spec = self._check_entry(candles_5m)
+        if spec:
+            self._open_tranche(spec)
+
+        return list(self._log_lines)
+
+    # ── quick fill-check (called more frequently than full tick) ──────────────
+
+    def fast_check(self, price: float) -> None:
+        self.current_price = price
+        self._manage(price)
+
+    # ── state export ──────────────────────────────────────────────────────────
+
+    def get_state(self) -> dict:
+        price = self.current_price
+        open_t    = [t for t in self.tranches if t.state == "OPEN"]
+        pending_t = [t for t in self.tranches if t.state == "PENDING"]
+
+        pnl_real  = sum(t.pnl for t in self.tranches if t.state in ("CLOSED", "STOPPED"))
+        pnl_unr   = sum(t.unrealized_pnl(price) for t in open_t)
+        pos_qty   = sum(t.qty for t in open_t)
+
+        # active_orders — pending buys + TP sells — for visualizer overlays
+        active_orders = []
+        for t in pending_t:
+            active_orders.append({
+                "id": t.id, "side": "BUY",
+                "price": t.order_price, "qty": t.qty,
+                "label": f"limit #{t.id}", "color": "#3b82f6",
+            })
+        for t in open_t:
+            active_orders.append({
+                "id": f"{t.id}_tp", "side": "SELL",
+                "price": t.tp_price, "qty": t.qty,
+                "label": f"TP #{t.id}", "color": "#0ecb81",
+            })
+
+        sl_lines = [
+            {"price": t.sl_price, "label": f"SL #{t.id}", "color": "#f6465d"}
+            for t in open_t
+        ]
+
+        open_bags = [
+            {
+                "id": t.id,
+                "entry_price": t.entry_price,
+                "qty": round(t.qty, 8),
+                "tp_price": t.tp_price,
+                "sl_price": t.sl_price,
+                "unrealized_pnl": round(t.unrealized_pnl(price), 4),
+                "age_s": int(time.time()) - t.entry_time,
+            }
+            for t in open_t
+        ]
+
+        return {
+            # identity
+            "strategy": "pullback_v1",
+            "symbol": self.symbol,
+            # regime
+            "regime": self.regime,
+            "daily_bias": self.daily_bias,
+            "rsi_5m": round(self.rsi_5m, 1),
+            "atr_5m": round(self.atr_5m, 2),
+            # capital
+            "capital_total": self.capital,
+            "capital_free": round(self._free(), 4),
+            "capital_deployed": round(self._deployed(), 4),
+            "cash": round(self._free(), 4),
+            # zones (for visualizer shading)
+            "support_zones":    [z.to_dict() for z in self.support_zones[:8]],
+            "resistance_zones": [z.to_dict() for z in self.resistance_zones[:5]],
+            "support_level":    self.support_zones[0].low    if self.support_zones    else 0,
+            "resistance_level": self.resistance_zones[0].high if self.resistance_zones else 0,
+            "sl_lines": sl_lines,
+            # positions
+            "tranches":      [t.to_dict(price) for t in self.tranches[-30:]],
+            "open_bags":     open_bags,
+            "active_orders": active_orders,
+            "position_qty":  round(pos_qty, 8),
+            "avg_entry_price": (
+                sum(t.entry_price * t.qty for t in open_t) / pos_qty
+                if pos_qty > 0 else 0
+            ),
+            # pnl
+            "pnl_realized":   round(pnl_real, 4),
+            "pnl_unrealized": round(pnl_unr,  4),
+            # price
+            "price":      price,
+            "last_price": price,
+            # ledger + log
+            "ledger": [e.to_dict() for e in self.ledger[-100:]],
+            "log":    self._log_lines[-50:],
+            # meta
+            "updated_at": time.time(),
+        }
+
+    def _emit(self, msg: str) -> None:
+        ts = time.strftime("%H:%M:%S")
+        line = f"{ts}  {msg}"
+        self._log_lines.append(line)
+        if len(self._log_lines) > 200:
+            self._log_lines = self._log_lines[-200:]
+        log.info("pullback_v1 %s", msg)
