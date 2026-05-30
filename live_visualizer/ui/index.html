@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Algo Fun Live BTC/USDC Visualizer</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">Paper Trading Visualizer</div>
+          <h1 id="symbol">BTCUSDC</h1>
+        </div>
+        <div class="market-strip">
+          <div>
+            <span>Last</span>
+            <strong id="last-price">--</strong>
+          </div>
+          <div>
+            <span>Bid</span>
+            <strong id="bid">--</strong>
+          </div>
+          <div>
+            <span>Ask</span>
+            <strong id="ask">--</strong>
+          </div>
+          <div>
+            <span>Feed</span>
+            <strong id="feed">CONNECTING</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="layout">
+        <div class="chart-panel">
+          <div class="chart-toolbar">
+            <div class="regime-pill" id="regime">UNKNOWN</div>
+            <div class="legend">
+              <span><i class="support"></i>Support</span>
+              <span><i class="resistance"></i>Resistance</span>
+              <span><i class="entry"></i>Avg Entry</span>
+              <span><i class="buy"></i>Buy</span>
+              <span><i class="sell"></i>Sell/TP</span>
+            </div>
+          </div>
+          <canvas id="chart"></canvas>
+        </div>
+
+        <aside class="side">
+          <section class="panel">
+            <h2>State</h2>
+            <dl class="stats">
+              <div><dt>Mode</dt><dd id="mode">--</dd></div>
+              <div><dt>Gear</dt><dd id="gear">--</dd></div>
+              <div><dt>Cash</dt><dd id="cash">--</dd></div>
+              <div><dt>Inventory</dt><dd id="inventory">--</dd></div>
+              <div><dt>Realized</dt><dd id="realized">--</dd></div>
+              <div><dt>Unrealized</dt><dd id="unrealized">--</dd></div>
+            </dl>
+          </section>
+
+          <section class="panel">
+            <h2>Active Orders</h2>
+            <div id="orders" class="list empty">No active orders</div>
+          </section>
+
+          <section class="panel">
+            <h2>Open Bags</h2>
+            <div id="bags" class="list empty">No open bags</div>
+          </section>
+
+          <section class="panel muted">
+            <h2>Source</h2>
+            <div id="source" class="source">Waiting for state source...</div>
+          </section>
+        </aside>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
