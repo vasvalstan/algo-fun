@@ -33,7 +33,8 @@
         </div>
       </header>
 
-      <section class="layout">
+      <!-- CHART TAB -->
+      <section class="layout" id="tab-chart">
         <div class="chart-panel">
           <div class="chart-toolbar">
             <div class="regime-pill" id="regime">UNKNOWN</div>
@@ -45,28 +46,54 @@
               <button class="tf" data-tf="4h">4h</button>
               <button class="tf" data-tf="1d">1d</button>
             </div>
-            <div class="legend">
-              <span><i class="support"></i>Support</span>
-              <span><i class="resistance"></i>Resistance</span>
-              <span><i class="entry"></i>Avg Entry</span>
-              <span><i class="buy"></i>Buy</span>
-              <span><i class="sell"></i>Sell/TP</span>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div class="legend">
+                <span><i class="support"></i>Support</span>
+                <span><i class="resistance"></i>Resistance</span>
+                <span><i class="entry"></i>Avg Entry</span>
+                <span><i class="buy"></i>Buy</span>
+                <span><i class="sell"></i>Sell/TP</span>
+              </div>
+              <button class="main-tab" onclick="showTab('history')" style="white-space:nowrap;">📋 History</button>
             </div>
           </div>
-          <canvas id="chart"></canvas>
+          <div style="position:relative;flex:1;min-height:0;">
+            <canvas id="chart" style="position:absolute;inset:0;width:100%;height:100%;"></canvas>
+            <div id="live-chip" onclick="snapToLive()" style="display:none;position:absolute;top:10px;right:84px;align-items:center;gap:6px;background:#1e293b;border:1px solid #3b82f6;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:700;color:#3b82f6;z-index:10;">
+              ▶ Back to Live
+            </div>
+          </div>
         </div>
 
         <aside class="side">
           <section class="panel">
-            <h2>State</h2>
+            <h2>Strategy</h2>
             <dl class="stats">
-              <div><dt>Mode</dt><dd id="mode">--</dd></div>
-              <div><dt>Gear</dt><dd id="gear">--</dd></div>
+              <div><dt>Regime</dt><dd id="mode">--</dd></div>
+              <div><dt>Bias</dt><dd id="gear">--</dd></div>
+              <div><dt>RSI 5M</dt><dd id="rsi">--</dd></div>
               <div><dt>Cash</dt><dd id="cash">--</dd></div>
-              <div><dt>Inventory</dt><dd id="inventory">--</dd></div>
               <div><dt>Realized</dt><dd id="realized">--</dd></div>
               <div><dt>Unrealized</dt><dd id="unrealized">--</dd></div>
             </dl>
+          </section>
+
+          <section class="panel next-buy-panel">
+            <h2>Next Buy</h2>
+            <div id="next-buy">
+              <div class="next-buy-status" id="next-buy-status">Waiting for data...</div>
+              <dl class="stats" id="next-buy-details" style="display:none">
+                <div><dt>Entry</dt><dd id="nb-entry">--</dd></div>
+                <div><dt>TP</dt><dd id="nb-tp" class="pos">--</dd></div>
+                <div><dt>SL</dt><dd id="nb-sl" class="neg">--</dd></div>
+                <div><dt>Zone</dt><dd id="nb-zone">--</dd></div>
+                <div><dt>Size</dt><dd id="nb-size">--</dd></div>
+              </dl>
+            </div>
+            <button class="force-buy-btn" id="force-buy-btn">
+              ⚡ Force Buy Now
+            </button>
+            <div id="force-buy-msg" class="force-buy-msg"></div>
           </section>
 
           <section class="panel">
@@ -79,13 +106,67 @@
             <div id="bags" class="list empty">No open bags</div>
           </section>
 
+          <section class="panel activity-panel">
+            <h2>Bot Activity</h2>
+            <div id="activity-log" class="activity-log"></div>
+          </section>
+
           <section class="panel muted">
-            <h2>Source</h2>
-            <div id="source" class="source">Waiting for state source...</div>
+            <h2>Info</h2>
+            <div id="source" class="source">Waiting for data...</div>
           </section>
         </aside>
       </section>
+
+      <!-- HISTORY TAB -->
+      <section class="history-view" id="tab-history" style="display:none;">
+        <div class="history-header">
+          <button class="main-tab active" onclick="showTab('chart')">← Chart</button>
+          <div class="history-summary" id="history-summary"></div>
+          <button class="refresh-btn" onclick="loadHistory()">⟳ Refresh</button>
+        </div>
+        <div class="history-table-wrap">
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Date / Time</th>
+                <th>Entry Price</th>
+                <th>Exit Price</th>
+                <th>Qty (BTC)</th>
+                <th>Size (USDC)</th>
+                <th>Profit</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody id="history-body">
+              <tr><td colspan="8" class="history-empty">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="history-raw-wrap">
+          <h3>Raw Ledger</h3>
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Date / Time</th>
+                <th>Tranche</th>
+                <th>Side</th>
+                <th>Price</th>
+                <th>Qty</th>
+                <th>USDC</th>
+                <th>Reason</th>
+                <th>P&L</th>
+              </tr>
+            </thead>
+            <tbody id="ledger-body">
+              <tr><td colspan="9" class="history-empty">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </main>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=4"></script>
   </body>
 </html>

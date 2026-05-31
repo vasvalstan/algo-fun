@@ -16,11 +16,12 @@ import time
 from typing import List, Optional
 from urllib.request import urlopen
 
-from live_visualizer.strategies.pullback_v1 import Candle, PullbackStrategyV1
+from live_visualizer.strategies.pullback_v1 import Candle, LedgerEntry, PullbackStrategyV1, Tranche
 
 log = logging.getLogger(__name__)
 
 _BINANCE_REST = "https://data-api.binance.vision/api/v3"
+_STATE_PATH   = os.path.join(os.getenv("PULLBACK_DATA_DIR", "/data"), "pullback_v1_state.json")
 
 # Module-level singleton
 _strategy: Optional[PullbackStrategyV1] = None
@@ -34,6 +35,75 @@ def get_state() -> dict:
     if _strategy is None:
         return {"status": "starting", "strategy": "pullback_v1"}
     return _strategy.get_state()
+
+
+# ── persistence ───────────────────────────────────────────────────────────────
+
+def _save(strat: PullbackStrategyV1) -> None:
+    try:
+        os.makedirs(os.path.dirname(_STATE_PATH), exist_ok=True)
+        data = {
+            "capital": strat.capital,
+            "counter": strat._counter,
+            "tranches": [t.to_dict(strat.current_price) for t in strat.tranches],
+            "ledger":   [e.to_dict() for e in strat.ledger],
+        }
+        tmp = _STATE_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, _STATE_PATH)
+    except Exception as e:
+        log.warning("pullback_v1: save failed: %s", e)
+
+
+def _restore(strat: PullbackStrategyV1) -> int:
+    """Load saved tranches + ledger. Returns number of tranches restored."""
+    try:
+        with open(_STATE_PATH) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        log.info("pullback_v1: no saved state found — starting fresh")
+        return 0
+    except Exception as e:
+        log.warning("pullback_v1: restore failed: %s", e)
+        return 0
+
+    strat._counter = data.get("counter", 0)
+
+    for td in data.get("tranches", []):
+        t = Tranche(
+            id=td["id"],
+            state=td["state"],
+            order_price=td["order_price"],
+            entry_price=td["entry_price"],
+            qty=td["qty"],
+            tp_price=td["tp_price"],
+            sl_price=td["sl_price"],
+            entry_time=td["entry_time"],
+            exit_time=td.get("exit_time"),
+            exit_price=td.get("exit_price"),
+            pnl=td.get("pnl", 0.0),
+            reason=td.get("reason", ""),
+        )
+        strat.tranches.append(t)
+
+    for ld in data.get("ledger", []):
+        strat.ledger.append(LedgerEntry(
+            id=ld["id"],
+            tranche_id=ld["tranche_id"],
+            side=ld["side"],
+            price=ld["price"],
+            qty=ld["qty"],
+            usdc=ld["usdc"],
+            timestamp=ld["timestamp"],
+            pnl=ld["pnl"],
+            reason=ld["reason"],
+        ))
+
+    active = sum(1 for t in strat.tranches if t.state in ("PENDING", "OPEN"))
+    log.info("pullback_v1: restored %d tranches (%d active), %d ledger entries",
+             len(strat.tranches), active, len(strat.ledger))
+    return active
 
 
 # ── data fetching ─────────────────────────────────────────────────────────────
@@ -68,6 +138,9 @@ async def run_pullback_loop(symbol: str = "BTCUSDC", capital: float = 5_000.0) -
     log.info("pullback_v1 runner starting  symbol=%s  capital=%.0f", symbol, capital)
 
     _strategy = PullbackStrategyV1(symbol=symbol, capital=capital)
+    restored = _restore(_strategy)
+    if restored:
+        log.info("pullback_v1: resumed with %d active position(s)", restored)
 
     candles_5m:     List[Candle] = []
     candles_1h:     List[Candle] = []
@@ -104,8 +177,10 @@ async def run_pullback_loop(symbol: str = "BTCUSDC", capital: float = 5_000.0) -
                 for m in msgs:
                     log.info(m)
                 last_tick = now
+                _save(_strategy)   # persist after every full tick
             else:
                 _strategy.fast_check(price)
+                _save(_strategy)   # persist after fill checks too
 
         except asyncio.CancelledError:
             raise

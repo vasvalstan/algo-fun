@@ -16,6 +16,7 @@ Fee      : 0 % (paper)
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from typing import List, Optional, Tuple
@@ -155,17 +156,19 @@ def _atr(candles: List[Candle], period: int = 14) -> float:
 # ─────────────────────────────── strategy ────────────────────────────────────
 
 class PullbackStrategyV1:
-    TRANCHE_USDC   = 1_000.0
-    TP_PCT         = 0.0015    # 0.15 %
-    ATR_SL_MULT    = 0.5       # SL = support_low − ATR×0.5
-    RSI_THRESHOLD  = 45        # must be below this to enter
-    PIVOT_BARS     = 3         # bars each side for pivot detection
-    ZONE_TOL_PCT   = 0.003     # group pivots within 0.3 %
-    ATR_PERIOD     = 14
+    PIVOT_BARS   = 3
+    ZONE_TOL_PCT = 0.003
+    ATR_PERIOD   = 14
 
     def __init__(self, symbol: str = "BTCUSDC", capital: float = 5_000.0):
         self.symbol  = symbol
         self.capital = capital
+        # ── configurable via env vars (no redeploy needed) ──
+        self.TRANCHE_USDC  = float(os.getenv("PULLBACK_TRANCHE_USDC",  "1000"))
+        self.TP_PCT        = float(os.getenv("PULLBACK_TP_PCT",        "0.001"))
+        self.TP_DOLLARS    = float(os.getenv("PULLBACK_TP_DOLLARS",    "0"))    # 0 = use TP_PCT
+        self.ATR_SL_MULT   = float(os.getenv("PULLBACK_ATR_SL_MULT",   "0.5"))
+        self.RSI_THRESHOLD = float(os.getenv("PULLBACK_RSI_THRESHOLD", "45"))
 
         self.tranches: List[Tranche]       = []
         self.ledger:   List[LedgerEntry]   = []
@@ -319,11 +322,41 @@ class PullbackStrategyV1:
                 continue
 
             buy   = zone.low
-            tp    = buy * (1.0 + self.TP_PCT)
+            tp    = self._calc_tp(buy)
             sl    = zone.low - self.atr_5m * self.ATR_SL_MULT
             return {"buy_price": buy, "tp_price": tp, "sl_price": sl, "zone": zone}
 
         return None
+
+    def _calc_tp(self, entry_price: float) -> float:
+        """Calculate TP price — fixed $$ distance or % based."""
+        if self.TP_DOLLARS > 0:
+            return entry_price + self.TP_DOLLARS
+        return entry_price + self.TP_DOLLARS if self.TP_DOLLARS > 0 else entry_price * (1.0 + self.TP_PCT)
+
+    # ── forced buy (bypasses all regime/RSI gates) ───────────────────────────
+
+    def force_buy(self) -> str:
+        """Open a tranche immediately at current price, bypassing all filters."""
+        price = self.current_price
+        if price <= 0:
+            return "error: price not available yet"
+        if self._free() < self.TRANCHE_USDC:
+            return f"error: not enough free capital (have ${self._free():.0f}, need $1,000)"
+
+        # Use nearest support zone for SL/TP reference, fall back to ATR
+        sl_ref = price - max(self.atr_5m * self.ATR_SL_MULT, price * 0.003)
+        tp     = self._calc_tp(price)
+
+        if self.support_zones:
+            nearest = min(self.support_zones, key=lambda z: abs(z.low - price))
+            sl_ref  = nearest.low - self.atr_5m * self.ATR_SL_MULT
+
+        spec = {"buy_price": price, "tp_price": tp, "sl_price": sl_ref, "zone": None}
+        t = self._open_tranche(spec)
+        # Force-fill immediately at current price
+        self._fill(t, price)
+        return f"ok: bought {t.qty:.6f} BTC @ ${price:.2f}  TP=${tp:.2f}  SL=${sl_ref:.2f}"
 
     # ── tranche lifecycle ─────────────────────────────────────────────────────
 
@@ -406,15 +439,36 @@ class PullbackStrategyV1:
             self.atr_5m = _atr(candles_5m, self.ATR_PERIOD)
 
         self.regime, self.daily_bias = self._detect_regime(candles_weekly, candles_daily)
+        tp_label = f"${self.TP_DOLLARS:.0f}" if self.TP_DOLLARS > 0 else f"{self.TP_PCT*100:.2f}%"
+        self._emit(f"📊 Regime: {self.regime} · Bias: {self.daily_bias} · RSI: {round(self.rsi_5m,1)} · TP: {tp_label}")
 
         if candles_1h:
             self.support_zones, self.resistance_zones = self._find_zones(candles_1h)
+            if self.support_zones:
+                z = self.support_zones[0]
+                self._emit(f"🗺 Nearest support: ${z.low:,.2f}–${z.high:,.2f} ({z.strength}, {z.touches}x tested)")
 
         self._manage(price)
 
         spec = self._check_entry(candles_5m)
         if spec:
             self._open_tranche(spec)
+        else:
+            # Explain why not entering
+            if self.regime in ("CRASH", "BEAR"):
+                self._emit(f"⛔ No entry — regime is {self.regime}")
+            elif self.regime == "SIDEWAYS" and self.daily_bias == "BEARISH":
+                self._emit("⛔ No entry — sideways + bearish bias")
+            elif self._free() < self.TRANCHE_USDC:
+                self._emit(f"💰 No capital — ${self._free():.0f} free of $1,000 needed")
+            elif self.rsi_5m >= self.RSI_THRESHOLD:
+                self._emit(f"⏳ Waiting — RSI {self.rsi_5m:.1f} too high (need < {self.RSI_THRESHOLD})")
+            elif self.support_zones:
+                z = self.support_zones[0]
+                dist = abs(price - z.low) / price * 100
+                self._emit(f"📍 Price ${price:,.2f} — {dist:.2f}% from nearest support ${z.low:,.2f}")
+            else:
+                self._emit("🔍 Scanning for support zones...")
 
         return list(self._log_lines)
 
@@ -472,6 +526,12 @@ class PullbackStrategyV1:
             # identity
             "strategy": "pullback_v1",
             "symbol": self.symbol,
+            "params": {
+                "tp_pct": self.TP_PCT,
+                "atr_sl_mult": self.ATR_SL_MULT,
+                "rsi_threshold": self.RSI_THRESHOLD,
+                "tranche_usdc": self.TRANCHE_USDC,
+            },
             # regime
             "regime": self.regime,
             "daily_bias": self.daily_bias,

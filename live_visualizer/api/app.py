@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from live_visualizer.config import settings
-from live_visualizer.runners.pullback_runner import run_pullback_loop, get_state as _pullback_state
+from live_visualizer.runners.pullback_runner import run_pullback_loop, get_state as _pullback_state, get_strategy as _get_strategy, _save as _save_state
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +76,17 @@ async def config() -> dict:
 async def snapshot() -> dict:
     """Full strategy state — polled by the browser every second."""
     return _pullback_state()
+
+
+@app.post("/api/force-buy")
+async def force_buy() -> dict:
+    """Force open a tranche at current price, bypassing all strategy filters."""
+    strat = _get_strategy()
+    if strat is None:
+        return {"status": "error", "message": "Strategy not started yet"}
+    result = strat.force_buy()
+    _save_state(strat)  # persist immediately
+    return {"status": "ok" if result.startswith("ok") else "error", "message": result}
 
 
 @app.get("/api/ledger")
