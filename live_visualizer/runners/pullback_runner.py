@@ -38,6 +38,12 @@ def get_state() -> dict:
     return _strategy.get_state()
 
 
+def get_history() -> dict:
+    if _strategy is None:
+        return {"rows": [], "total": 0}
+    return _strategy.get_history()
+
+
 # ── persistence ───────────────────────────────────────────────────────────────
 
 def _save(strat: PullbackStrategyV1) -> None:

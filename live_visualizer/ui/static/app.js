@@ -1089,88 +1089,68 @@ function drawEquityCurve(points, startCapital) {
 // ── History tab ────────────────────────────────────────────────────────────
 async function loadHistory() {
   try {
-    const data = await fetch("/api/ledger").then(r => r.json());
+    const data = await fetch("/api/history").then(r => r.json());
     renderHistory(data);
   } catch (e) {
     document.getElementById("history-body").innerHTML =
-      '<tr><td colspan="8" class="history-empty">Failed to load</td></tr>';
+      '<tr><td colspan="12" class="history-empty">Failed to load</td></tr>';
   }
 }
 
+function money2(v) {
+  return "$" + Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtDuration(s) {
+  if (s == null) return "--";
+  if (s < 60)    return s + "s";
+  if (s < 3600)  return Math.floor(s/60) + "m " + (s%60) + "s";
+  if (s < 86400) return Math.floor(s/3600) + "h " + Math.floor((s%3600)/60) + "m";
+  return Math.floor(s/86400) + "d " + Math.floor((s%86400)/3600) + "h";
+}
+
 function renderHistory(data) {
-  const ledger = data.ledger || [];
+  const rows = data.rows || [];
 
-  // ── Group BUY+SELL pairs by tranche_id ──
-  const buys  = {};
-  const sells = {};
-  for (const e of ledger) {
-    if (e.side === "BUY")  buys[e.tranche_id]  = e;
-    if (e.side === "SELL") sells[e.tranche_id] = e;
-  }
-
-  const trades = Object.keys(buys).map(tid => ({
-    tid,
-    buy:  buys[tid],
-    sell: sells[tid] || null,
-  })).sort((a, b) => b.buy.timestamp - a.buy.timestamp);
-
-  // ── Summary stats ──
-  const closed = trades.filter(t => t.sell);
-  const totalPnl = closed.reduce((s, t) => s + t.sell.pnl, 0);
-  const wins  = closed.filter(t => t.sell.pnl > 0).length;
-  const losses = closed.filter(t => t.sell.pnl <= 0).length;
+  // ── Summary ──
   document.getElementById("history-summary").innerHTML = `
-    <span>${closed.length} completed trades</span>
-    <span class="${totalPnl >= 0 ? "pos" : "neg"}">Total P&L: $${totalPnl.toFixed(4)}</span>
-    <span class="pos">✅ ${wins} wins</span>
-    <span class="neg">❌ ${losses} losses</span>
-    <span>${trades.length - closed.length} open</span>
+    <span>${data.completed || 0} completed</span>
+    <span class="${(data.total_pnl||0) >= 0 ? "pos" : "neg"}">Total P&L: ${(data.total_pnl||0)>=0?"+":""}$${(data.total_pnl||0).toFixed(4)}</span>
+    <span class="pos">✅ ${data.wins || 0} wins</span>
+    <span class="neg">❌ ${data.losses || 0} losses</span>
+    <span>${data.win_rate || 0}% win rate</span>
+    <span class="warn">${data.open || 0} open</span>
   `;
 
-  // ── Trades table ──
+  // ── One consolidated table ──
   const tbody = document.getElementById("history-body");
-  if (!trades.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="history-empty">No trades yet</td></tr>';
-  } else {
-    tbody.innerHTML = trades.map((t, i) => {
-      const buy  = t.buy;
-      const sell = t.sell;
-      const pnl  = sell ? sell.pnl : null;
-      const result = sell ? sell.reason : "OPEN";
-      const resultCls = result === "TP" ? "pos" : result === "SL" ? "neg" : result === "OPEN" ? "warn" : "";
-      return `<tr>
-        <td>${trades.length - i}</td>
-        <td>${fmtTs(buy.timestamp)}</td>
-        <td>$${buy.price.toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-        <td>${sell ? "$" + sell.price.toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2}) : "<span class='warn'>open</span>"}</td>
-        <td>${buy.qty.toFixed(6)}</td>
-        <td>$${buy.usdc.toFixed(2)}</td>
-        <td class="${pnl != null ? (pnl >= 0 ? "pos" : "neg") : ""}">${pnl != null ? (pnl >= 0 ? "+" : "") + "$" + pnl.toFixed(4) : "--"}</td>
-        <td class="${resultCls}">${result}</td>
-      </tr>`;
-    }).join("");
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="12" class="history-empty">No trades yet</td></tr>';
+    return;
   }
 
-  // ── Raw ledger table ──
-  const lbody = document.getElementById("ledger-body");
-  if (!ledger.length) {
-    lbody.innerHTML = '<tr><td colspan="9" class="history-empty">No entries yet</td></tr>';
-  } else {
-    lbody.innerHTML = [...ledger].reverse().map(e => {
-      const cls = e.side === "BUY" ? "pos" : e.pnl >= 0 ? "pos" : "neg";
-      return `<tr>
-        <td>${e.id}</td>
-        <td>${fmtTs(e.timestamp)}</td>
-        <td>${e.tranche_id}</td>
-        <td class="${e.side === "BUY" ? "pos" : "warn"}">${e.side}</td>
-        <td>$${e.price.toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-        <td>${e.qty.toFixed(6)}</td>
-        <td>$${e.usdc.toFixed(2)}</td>
-        <td>${e.reason}</td>
-        <td class="${cls}">${e.side === "SELL" ? (e.pnl >= 0 ? "+" : "") + "$" + e.pnl.toFixed(4) : "--"}</td>
-      </tr>`;
-    }).join("");
-  }
+  tbody.innerHTML = rows.map((r, i) => {
+    const isOpen = r.state === "OPEN" || r.state === "PENDING";
+    const result = r.result;
+    const resultCls = result === "TP" ? "pos" : result === "SL" || result === "STOPPED" ? "neg"
+                    : isOpen ? "warn" : "";
+    const pnlCls = isOpen ? "warn" : (r.pnl >= 0 ? "pos" : "neg");
+    const pnlPrefix = r.pnl >= 0 ? "+" : "";
+    return `<tr>
+      <td>${rows.length - i}</td>
+      <td>${fmtTs(r.entry_time)}</td>
+      <td>${money2(r.entry_price)}</td>
+      <td class="pos">${money2(r.tp_price)}</td>
+      <td class="neg">${money2(r.sl_price)}</td>
+      <td>${r.exit_time ? fmtTs(r.exit_time) : "<span class='warn'>—</span>"}</td>
+      <td>${r.exit_price ? money2(r.exit_price) : "<span class='warn'>open</span>"}</td>
+      <td>${r.qty.toFixed(6)}</td>
+      <td>${money2(r.size_usdc)}</td>
+      <td>${fmtDuration(r.duration_s)}</td>
+      <td class="${pnlCls}">${pnlPrefix}$${r.pnl.toFixed(4)}${isOpen ? " (unrl)" : ""}</td>
+      <td class="${resultCls}">${result}</td>
+    </tr>`;
+  }).join("");
 }
 
 function fmtTs(ts) {

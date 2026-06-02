@@ -482,6 +482,45 @@ class PullbackStrategyV1:
 
     # ── state export ──────────────────────────────────────────────────────────
 
+    def get_history(self) -> dict:
+        """One consolidated record per tranche with every detail."""
+        price = self.current_price
+        rows = []
+        for t in self.tranches:
+            duration = None
+            if t.exit_time and t.entry_time:
+                duration = int(t.exit_time - t.entry_time)
+            rows.append({
+                "id":           t.id,
+                "state":        t.state,
+                "entry_time":   t.entry_time,
+                "entry_price":  round(t.entry_price, 2),
+                "tp_price":     round(t.tp_price, 2),
+                "sl_price":     round(t.sl_price, 2),
+                "exit_time":    t.exit_time,
+                "exit_price":   round(t.exit_price, 2) if t.exit_price else None,
+                "qty":          round(t.qty, 8),
+                "size_usdc":    round(t.entry_price * t.qty, 2),
+                "pnl":          round(t.pnl, 4) if t.state in ("CLOSED", "STOPPED") else
+                                round(t.unrealized_pnl(price), 4),
+                "result":       t.reason or t.state,
+                "duration_s":   duration,
+            })
+        rows.sort(key=lambda r: r["entry_time"], reverse=True)
+
+        closed = [r for r in rows if r["state"] in ("CLOSED", "STOPPED")]
+        wins   = [r for r in closed if r["pnl"] > 0]
+        return {
+            "rows":          rows,
+            "total":         len(rows),
+            "completed":     len(closed),
+            "open":          sum(1 for r in rows if r["state"] == "OPEN"),
+            "wins":          len(wins),
+            "losses":        len(closed) - len(wins),
+            "total_pnl":     round(sum(r["pnl"] for r in closed), 4),
+            "win_rate":      round(len(wins) / len(closed) * 100, 1) if closed else 0,
+        }
+
     def get_state(self) -> dict:
         price = self.current_price
         open_t    = [t for t in self.tranches if t.state == "OPEN"]

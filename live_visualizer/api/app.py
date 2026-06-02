@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from live_visualizer.config import settings
-from live_visualizer.runners.pullback_runner import run_pullback_loop, get_state as _pullback_state, get_strategy as _get_strategy, _save as _save_state
+from live_visualizer.runners.pullback_runner import run_pullback_loop, get_state as _pullback_state, get_strategy as _get_strategy, _save as _save_state, get_history as _pullback_history
 from live_visualizer.backtest.runner import run_backtest as _run_backtest, run_optimization as _run_optimization
 
 log = logging.getLogger(__name__)
@@ -126,6 +126,12 @@ async def optimize(body: dict) -> dict:
         _run_optimization, symbol, from_ts, to_ts, capital, grid, sort_by,
     )
     return result
+
+
+@app.get("/api/history")
+async def history() -> dict:
+    """Consolidated per-trade history with full detail."""
+    return _pullback_history()
 
 
 @app.get("/api/ledger")
