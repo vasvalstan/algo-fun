@@ -691,13 +691,169 @@ canvas.addEventListener("touchend", () => { lastTouchDist = 0; });
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 function showTab(tab) {
-  document.getElementById("tab-chart").style.display   = tab === "chart"   ? "" : "none";
-  document.getElementById("tab-history").style.display  = tab === "history" ? "" : "none";
+  ["chart","history","backtest"].forEach(t => {
+    const el = document.getElementById("tab-" + t);
+    if (el) el.style.display = t === tab ? "" : "none";
+  });
   document.querySelectorAll(".main-tab").forEach(b =>
     b.classList.toggle("active", b.textContent.toLowerCase().includes(tab))
   );
-  if (tab === "history") loadHistory();
+  if (tab === "history")  loadHistory();
+  else if (tab === "backtest") initBacktest();
   else { resize(); drawChart(); }
+}
+
+// ── Backtest ───────────────────────────────────────────────────────────────
+function initBacktest() {
+  // Set default dates: last 30 days
+  const now  = new Date();
+  const from = new Date(now - 30 * 86400000);
+  document.getElementById("bt-to").value   = now.toISOString().slice(0,10);
+  document.getElementById("bt-from").value = from.toISOString().slice(0,10);
+}
+
+async function runBacktest() {
+  const btn    = document.getElementById("bt-run-btn");
+  const status = document.getElementById("bt-status");
+  btn.disabled = true;
+  btn.textContent = "⏳ Running...";
+  document.getElementById("bt-results").style.display = "none";
+  status.textContent = "Fetching historical data and running simulation...";
+
+  const fromDate = new Date(document.getElementById("bt-from").value);
+  const toDate   = new Date(document.getElementById("bt-to").value);
+  toDate.setHours(23,59,59);
+
+  const body = {
+    from_ts:       Math.floor(fromDate / 1000),
+    to_ts:         Math.floor(toDate   / 1000),
+    tp_pct:        parseFloat(document.getElementById("bt-tp").value)      / 100,
+    atr_sl_mult:   parseFloat(document.getElementById("bt-sl").value),
+    rsi_threshold: parseFloat(document.getElementById("bt-rsi").value),
+    tranche_usdc:  parseFloat(document.getElementById("bt-tranche").value),
+    capital:       parseFloat(document.getElementById("bt-capital").value),
+  };
+
+  try {
+    const res  = await fetch("/api/backtest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+
+    if (data.error) {
+      status.textContent = "❌ " + data.error;
+    } else {
+      status.textContent = `✅ Done in ${data.elapsed_s}s — ${data.candles_processed} candles processed`;
+      renderBacktestResults(data);
+      document.getElementById("bt-results").style.display = "";
+    }
+  } catch (e) {
+    status.textContent = "❌ Request failed: " + e.message;
+  }
+
+  btn.disabled = false;
+  btn.textContent = "▶ Run";
+}
+
+function renderBacktestResults(d) {
+  const pnlCls = d.total_pnl >= 0 ? "pos" : "neg";
+  document.getElementById("bt-summary").innerHTML = `
+    <div class="bt-stat"><span>Trades</span><strong>${d.total_trades}</strong></div>
+    <div class="bt-stat pos"><span>Wins</span><strong>✅ ${d.wins}</strong></div>
+    <div class="bt-stat neg"><span>Losses</span><strong>❌ ${d.losses}</strong></div>
+    <div class="bt-stat"><span>Win Rate</span><strong>${d.win_rate}%</strong></div>
+    <div class="bt-stat ${pnlCls}"><span>Total P&L</span><strong>${d.total_pnl >= 0 ? "+" : ""}$${d.total_pnl.toFixed(4)}</strong></div>
+    <div class="bt-stat"><span>Final Capital</span><strong>$${d.final_equity.toFixed(2)}</strong></div>
+    <div class="bt-stat neg"><span>Max Drawdown</span><strong>-${d.max_drawdown}%</strong></div>
+    <div class="bt-stat pos"><span>Best Trade</span><strong>+$${d.best_trade.toFixed(4)}</strong></div>
+    <div class="bt-stat neg"><span>Worst Trade</span><strong>$${d.worst_trade.toFixed(4)}</strong></div>
+  `;
+
+  // Equity curve
+  drawEquityCurve(d.equity_curve, d.capital);
+
+  // Trades table
+  const tbody = document.getElementById("bt-trades");
+  if (!d.trades.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="history-empty">No trades in this period</td></tr>';
+  } else {
+    tbody.innerHTML = d.trades.map((t, i) => {
+      const cls = t.result === "TP" ? "pos" : t.result === "SL" ? "neg" : t.result === "OPEN" ? "warn" : "";
+      return `<tr>
+        <td>${d.trades.length - i}</td>
+        <td>${fmtTs(t.entry_time)}</td>
+        <td>${t.exit_time ? fmtTs(t.exit_time) : "<span class='warn'>open</span>"}</td>
+        <td>$${t.entry_price.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+        <td>${t.exit_price ? "$"+t.exit_price.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}) : "--"}</td>
+        <td>${t.qty.toFixed(6)}</td>
+        <td>$${t.size_usdc.toFixed(2)}</td>
+        <td class="${t.pnl >= 0 ? "pos" : "neg"}">${t.pnl >= 0 ? "+" : ""}$${t.pnl.toFixed(4)}</td>
+        <td class="${cls}">${t.result}</td>
+      </tr>`;
+    }).join("");
+  }
+}
+
+function drawEquityCurve(points, startCapital) {
+  const canvas = document.getElementById("bt-chart");
+  if (!canvas || !points.length) return;
+  const ctx = canvas.getContext("2d");
+  const W = canvas.offsetWidth;
+  const H = canvas.offsetHeight;
+  canvas.width  = W * (window.devicePixelRatio || 1);
+  canvas.height = H * (window.devicePixelRatio || 1);
+  ctx.setTransform(window.devicePixelRatio||1, 0, 0, window.devicePixelRatio||1, 0, 0);
+
+  ctx.fillStyle = "#11161d";
+  ctx.fillRect(0, 0, W, H);
+
+  const equities = points.map(p => p.equity);
+  const minE = Math.min(...equities, startCapital) * 0.999;
+  const maxE = Math.max(...equities, startCapital) * 1.001;
+  const span = maxE - minE || 1;
+
+  const pad = { left: 8, right: 8, top: 12, bottom: 8 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top  - pad.bottom;
+
+  const xOf = i => pad.left + i / (points.length - 1) * cW;
+  const yOf = v => pad.top  + (maxE - v) / span * cH;
+
+  // Baseline
+  const baseY = yOf(startCapital);
+  ctx.strokeStyle = "#29313d";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(pad.left, baseY); ctx.lineTo(W - pad.right, baseY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Fill
+  const lastColor = equities[equities.length - 1] >= startCapital ? "#0ecb81" : "#f6465d";
+  ctx.beginPath();
+  ctx.moveTo(xOf(0), yOf(equities[0]));
+  for (let i = 1; i < points.length; i++) ctx.lineTo(xOf(i), yOf(equities[i]));
+  ctx.lineTo(xOf(points.length - 1), H);
+  ctx.lineTo(xOf(0), H);
+  ctx.closePath();
+  ctx.fillStyle = lastColor + "22";
+  ctx.fill();
+
+  // Line
+  ctx.strokeStyle = lastColor;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(xOf(0), yOf(equities[0]));
+  for (let i = 1; i < points.length; i++) ctx.lineTo(xOf(i), yOf(equities[i]));
+  ctx.stroke();
+
+  // Label final equity
+  ctx.fillStyle = lastColor;
+  ctx.font = "bold 12px system-ui";
+  ctx.textAlign = "right";
+  ctx.fillText("$" + equities[equities.length-1].toFixed(0), W - pad.right - 4, yOf(equities[equities.length-1]) - 6);
+  ctx.textAlign = "left";
 }
 
 // ── History tab ────────────────────────────────────────────────────────────

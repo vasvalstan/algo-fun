@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from live_visualizer.config import settings
 from live_visualizer.runners.pullback_runner import run_pullback_loop, get_state as _pullback_state, get_strategy as _get_strategy, _save as _save_state
+from live_visualizer.backtest.runner import run_backtest as _run_backtest
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +88,26 @@ async def force_buy() -> dict:
     result = strat.force_buy()
     _save_state(strat)  # persist immediately
     return {"status": "ok" if result.startswith("ok") else "error", "message": result}
+
+
+@app.post("/api/backtest")
+async def backtest(body: dict) -> dict:
+    """Run a backtest over a historical period."""
+    import time as _time
+    from_ts = int(body.get("from_ts", int(_time.time()) - 30 * 86400))
+    to_ts   = int(body.get("to_ts",   int(_time.time())))
+    symbol  = str(body.get("symbol",  settings.symbol))
+    capital = float(body.get("capital", 5000.0))
+    tp_pct  = float(body.get("tp_pct", 0.001))
+    atr_sl  = float(body.get("atr_sl_mult", 0.5))
+    rsi_thr = float(body.get("rsi_threshold", 45.0))
+    tranche = float(body.get("tranche_usdc", 1000.0))
+
+    result = await asyncio.to_thread(
+        _run_backtest, symbol, from_ts, to_ts,
+        capital, tp_pct, atr_sl, rsi_thr, tranche,
+    )
+    return result
 
 
 @app.get("/api/ledger")
