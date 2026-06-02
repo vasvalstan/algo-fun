@@ -377,14 +377,20 @@ function drawChart() {
   const liveChip = document.getElementById("live-chip");
   if (liveChip) liveChip.style.display = offset > 0 ? "flex" : "none";
 
+  // Only include overlay prices within 5% of current price to avoid chart distortion
+  const candleMax = Math.max(...visible.map(c => c.high));
+  const candleMin = Math.min(...visible.map(c => c.low));
+  const candleMid = (candleMax + candleMin) / 2;
+  const priceRange = candleMid * 0.05;
+
   const overlayPrices = [
     ...orders.map(o => o.price),
     ...bags.flatMap(b => [b.entry_price, b.tp_price || 0]),
     support, resistance, avgEntry,
-  ].filter(Boolean);
+  ].filter(p => p && Math.abs(p - candleMid) < priceRange);
 
-  const max = Math.max(...visible.map(c => c.high), ...overlayPrices);
-  const min = Math.min(...visible.map(c => c.low), ...overlayPrices);
+  const max = Math.max(candleMax, ...overlayPrices);
+  const min = Math.min(candleMin, ...overlayPrices);
   const span = Math.max(1, max - min);
   const y = price => pad.top + (max - price) / span * chartH;
   const x = i => pad.left + i / Math.max(1, visible.length - 1) * chartW;
