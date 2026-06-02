@@ -160,15 +160,17 @@ class PullbackStrategyV1:
     ZONE_TOL_PCT = 0.003
     ATR_PERIOD   = 14
 
-    def __init__(self, symbol: str = "BTCUSDC", capital: float = 5_000.0):
+    def __init__(self, symbol: str = "BTCUSDC", capital: float = 5_000.0,
+                 params: Optional[dict] = None):
         self.symbol  = symbol
         self.capital = capital
-        # ── configurable via env vars (no redeploy needed) ──
-        self.TRANCHE_USDC  = float(os.getenv("PULLBACK_TRANCHE_USDC",  "1000"))
-        self.TP_PCT        = float(os.getenv("PULLBACK_TP_PCT",        "0.001"))
-        self.TP_DOLLARS    = float(os.getenv("PULLBACK_TP_DOLLARS",    "0"))    # 0 = use TP_PCT
-        self.ATR_SL_MULT   = float(os.getenv("PULLBACK_ATR_SL_MULT",   "0.5"))
-        self.RSI_THRESHOLD = float(os.getenv("PULLBACK_RSI_THRESHOLD", "45"))
+        # ── params: explicit override > env var > default ──
+        p = params or {}
+        self.TRANCHE_USDC  = float(p.get("tranche_usdc",  os.getenv("PULLBACK_TRANCHE_USDC",  "1000")))
+        self.TP_PCT        = float(p.get("tp_pct",        os.getenv("PULLBACK_TP_PCT",        "0.001")))
+        self.TP_DOLLARS    = float(p.get("tp_dollars",    os.getenv("PULLBACK_TP_DOLLARS",    "0")))
+        self.ATR_SL_MULT   = float(p.get("atr_sl_mult",   os.getenv("PULLBACK_ATR_SL_MULT",   "0.5")))
+        self.RSI_THRESHOLD = float(p.get("rsi_threshold", os.getenv("PULLBACK_RSI_THRESHOLD", "45")))
 
         self.tranches: List[Tranche]       = []
         self.ledger:   List[LedgerEntry]   = []
@@ -332,7 +334,7 @@ class PullbackStrategyV1:
         """Calculate TP price — fixed $$ distance or % based."""
         if self.TP_DOLLARS > 0:
             return entry_price + self.TP_DOLLARS
-        return entry_price + self.TP_DOLLARS if self.TP_DOLLARS > 0 else entry_price * (1.0 + self.TP_PCT)
+        return entry_price * (1.0 + self.TP_PCT)
 
     # ── forced buy (bypasses all regime/RSI gates) ───────────────────────────
 

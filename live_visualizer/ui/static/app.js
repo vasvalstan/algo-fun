@@ -697,7 +697,7 @@ canvas.addEventListener("touchend", () => { lastTouchDist = 0; });
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 function showTab(tab) {
-  ["chart","history","backtest"].forEach(t => {
+  ["chart","history","backtest","optimize"].forEach(t => {
     const el = document.getElementById("tab-" + t);
     if (el) el.style.display = t === tab ? "" : "none";
   });
@@ -706,8 +706,117 @@ function showTab(tab) {
   );
   if (tab === "history")  loadHistory();
   else if (tab === "backtest") initBacktest();
+  else if (tab === "optimize") initOptimize();
   else { resize(); drawChart(); }
 }
+
+// ── Optimizer ──────────────────────────────────────────────────────────────
+function initOptimize() {
+  const now  = new Date();
+  const from = new Date(now - 30 * 86400000);
+  document.getElementById("op-to").value   = now.toISOString().slice(0,10);
+  document.getElementById("op-from").value = from.toISOString().slice(0,10);
+}
+
+function parseList(str) {
+  return str.split(",").map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+}
+
+async function runOptimize() {
+  const btn    = document.getElementById("op-run-btn");
+  const status = document.getElementById("op-status");
+
+  const tpList  = parseList(document.getElementById("op-tp").value);
+  const slList  = parseList(document.getElementById("op-sl").value);
+  const rsiList = parseList(document.getElementById("op-rsi").value);
+  const combos  = tpList.length * slList.length * rsiList.length;
+
+  if (combos === 0) { status.textContent = "❌ Enter at least one value per parameter"; return; }
+  if (combos > 200) { status.textContent = `❌ ${combos} combos — max 200. Reduce values.`; return; }
+
+  btn.disabled = true;
+  btn.textContent = "⏳ Running...";
+  document.getElementById("op-results").style.display = "none";
+  status.textContent = `Fetching data once, then testing ${combos} combinations... (may take 1-2 min)`;
+
+  const fromDate = new Date(document.getElementById("op-from").value);
+  const toDate   = new Date(document.getElementById("op-to").value);
+  toDate.setHours(23,59,59);
+
+  const body = {
+    from_ts: Math.floor(fromDate / 1000),
+    to_ts:   Math.floor(toDate / 1000),
+    capital: parseFloat(document.getElementById("op-capital").value),
+    sort_by: document.getElementById("op-sort").value,
+    grid: {
+      tp_dollars:    tpList,
+      atr_sl_mult:   slList,
+      rsi_threshold: rsiList,
+    },
+  };
+
+  try {
+    const res  = await fetch("/api/optimize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.error) {
+      status.textContent = "❌ " + data.error;
+    } else {
+      status.textContent = `✅ Tested ${data.combos_tested} combos in ${data.elapsed_s}s — ${data.candles_processed} candles`;
+      renderOptimize(data);
+      document.getElementById("op-results").style.display = "";
+    }
+  } catch (e) {
+    status.textContent = "❌ " + e.message;
+  }
+
+  btn.disabled = false;
+  btn.textContent = "🎯 Run Optimization";
+}
+
+function renderOptimize(data) {
+  const results = data.results || [];
+  const best = results[0];
+
+  if (best) {
+    const p = best.params;
+    document.getElementById("op-best").innerHTML = `
+      <div class="bt-stat pos" style="border-color:var(--green);">
+        <span>🏆 Best Config</span>
+        <strong>TP $${p.tp_dollars} · SL ${p.atr_sl_mult}× · RSI ${p.rsi_threshold}</strong>
+      </div>
+      <div class="bt-stat ${best.total_pnl>=0?"pos":"neg"}"><span>Total P&L</span><strong>${best.total_pnl>=0?"+":""}$${best.total_pnl.toFixed(2)}</strong></div>
+      <div class="bt-stat"><span>Return</span><strong>${best.return_pct}%</strong></div>
+      <div class="bt-stat"><span>Win Rate</span><strong>${best.win_rate}%</strong></div>
+      <div class="bt-stat"><span>Trades</span><strong>${best.total_trades}</strong></div>
+      <div class="bt-stat"><span>Profit Factor</span><strong>${best.profit_factor}</strong></div>
+      <div class="bt-stat neg"><span>Max DD</span><strong>-${best.max_drawdown}%</strong></div>
+    `;
+  }
+
+  const tbody = document.getElementById("op-table");
+  tbody.innerHTML = results.map((r, i) => {
+    const p = r.params;
+    const rowCls = i === 0 ? "style='background:rgba(14,203,129,0.08);'" : "";
+    return `<tr ${rowCls}>
+      <td>${i + 1}</td>
+      <td>$${p.tp_dollars}</td>
+      <td>${p.atr_sl_mult}×</td>
+      <td>${p.rsi_threshold}</td>
+      <td>${r.total_trades}</td>
+      <td>${r.win_rate}%</td>
+      <td class="${r.total_pnl>=0?"pos":"neg"}">${r.total_pnl>=0?"+":""}$${r.total_pnl.toFixed(2)}</td>
+      <td class="${r.return_pct>=0?"pos":"neg"}">${r.return_pct}%</td>
+      <td>${r.profit_factor}</td>
+      <td class="neg">-${r.max_drawdown}%</td>
+    </tr>`;
+  }).join("");
+}
+
+// ── Backtest helper (dollar TP support) ─────────────────────────────────────
 
 // ── Backtest ───────────────────────────────────────────────────────────────
 function initBacktest() {

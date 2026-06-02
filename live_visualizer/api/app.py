@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from live_visualizer.config import settings
 from live_visualizer.runners.pullback_runner import run_pullback_loop, get_state as _pullback_state, get_strategy as _get_strategy, _save as _save_state
-from live_visualizer.backtest.runner import run_backtest as _run_backtest
+from live_visualizer.backtest.runner import run_backtest as _run_backtest, run_optimization as _run_optimization
 
 log = logging.getLogger(__name__)
 
@@ -103,9 +103,27 @@ async def backtest(body: dict) -> dict:
     rsi_thr = float(body.get("rsi_threshold", 45.0))
     tranche = float(body.get("tranche_usdc", 1000.0))
 
+    tp_dollars = float(body.get("tp_dollars", 0.0))
     result = await asyncio.to_thread(
         _run_backtest, symbol, from_ts, to_ts,
-        capital, tp_pct, atr_sl, rsi_thr, tranche,
+        capital, tp_pct, atr_sl, rsi_thr, tranche, tp_dollars,
+    )
+    return result
+
+
+@app.post("/api/optimize")
+async def optimize(body: dict) -> dict:
+    """Grid-search many parameter combinations over a historical period."""
+    import time as _time
+    from_ts = int(body.get("from_ts", int(_time.time()) - 30 * 86400))
+    to_ts   = int(body.get("to_ts",   int(_time.time())))
+    symbol  = str(body.get("symbol",  settings.symbol))
+    capital = float(body.get("capital", 5000.0))
+    grid    = body.get("grid") or None
+    sort_by = str(body.get("sort_by", "total_pnl"))
+
+    result = await asyncio.to_thread(
+        _run_optimization, symbol, from_ts, to_ts, capital, grid, sort_by,
     )
     return result
 

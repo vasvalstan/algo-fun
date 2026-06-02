@@ -56,6 +56,7 @@
               </div>
               <button class="main-tab" onclick="showTab('history')" style="white-space:nowrap;">📋 History</button>
               <button class="main-tab" onclick="showTab('backtest')" style="white-space:nowrap;">🔬 Backtest</button>
+              <button class="main-tab" onclick="showTab('optimize')" style="white-space:nowrap;">🎯 Optimize</button>
             </div>
           </div>
           <div style="position:relative;flex:1;min-height:0;">
@@ -204,6 +205,57 @@
         </div>
       </section>
 
-    <script src="/static/app.js?v=5"></script>
+      <!-- OPTIMIZE TAB -->
+      <section class="history-view" id="tab-optimize" style="display:none;">
+        <div class="history-header">
+          <button class="main-tab active" onclick="showTab('chart')">← Chart</button>
+          <h2 style="margin:0;color:var(--text);font-size:16px;">🎯 Parameter Optimizer</h2>
+          <div></div>
+        </div>
+
+        <div class="panel bt-controls">
+          <div style="font-size:12px;color:var(--muted);margin-bottom:4px;">
+            Tests every combination of the values below and ranks them. Use comma-separated values.
+          </div>
+          <div class="bt-row">
+            <label>From<input type="date" id="op-from" /></label>
+            <label>To<input type="date" id="op-to" /></label>
+            <label>Capital $<input type="number" id="op-capital" value="5000" step="500" /></label>
+          </div>
+          <div class="bt-row">
+            <label>TP $ values<input type="text" id="op-tp" value="25, 50, 75, 100, 150, 200" style="width:200px;" /></label>
+            <label>SL ATR× values<input type="text" id="op-sl" value="0.5, 1.0, 1.5, 2.0" style="width:160px;" /></label>
+            <label>RSI max values<input type="text" id="op-rsi" value="35, 45, 55" style="width:140px;" /></label>
+          </div>
+          <div class="bt-row">
+            <label>Rank by
+              <select id="op-sort" style="background:var(--panel-2);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:13px;padding:6px 10px;">
+                <option value="total_pnl">Total P&L</option>
+                <option value="return_pct">Return %</option>
+                <option value="win_rate">Win Rate</option>
+                <option value="profit_factor">Profit Factor</option>
+                <option value="max_drawdown">Lowest Drawdown</option>
+                <option value="total_trades">Most Trades</option>
+              </select>
+            </label>
+            <button class="force-buy-btn" id="op-run-btn" onclick="runOptimize()" style="margin-top:0;width:auto;padding:8px 24px;">🎯 Run Optimization</button>
+          </div>
+          <div id="op-status" style="font-size:12px;color:var(--muted);margin-top:8px;"></div>
+        </div>
+
+        <div id="op-results" style="display:none;">
+          <div class="bt-summary" id="op-best"></div>
+          <div class="history-table-wrap">
+            <table class="history-table">
+              <thead>
+                <tr><th>Rank</th><th>TP $</th><th>SL ATR×</th><th>RSI</th><th>Trades</th><th>Win %</th><th>Total P&L</th><th>Return %</th><th>Profit Factor</th><th>Max DD</th></tr>
+              </thead>
+              <tbody id="op-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    <script src="/static/app.js?v=6"></script>
   </body>
 </html>
