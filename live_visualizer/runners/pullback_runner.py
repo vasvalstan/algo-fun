@@ -22,7 +22,9 @@ from live_visualizer.strategies.pullback_v1 import Candle, LedgerEntry, Pullback
 log = logging.getLogger(__name__)
 
 _BINANCE_REST = "https://data-api.binance.vision/api/v3"
-_STATE_PATH   = os.path.join(os.getenv("PULLBACK_DATA_DIR", "/data"), "pullback_v1_state.json")
+_DATA_DIR     = os.getenv("PULLBACK_DATA_DIR", "/data")
+# Separate state file per strategy so histories don't mix when switching.
+_STATE_PATH   = os.path.join(_DATA_DIR, f"{os.getenv('VIS_STRATEGY', 'pullback').lower()}_v1_state.json")
 
 # Module-level singleton
 _strategy: Optional[PullbackStrategyV1] = None
@@ -195,3 +197,53 @@ async def run_pullback_loop(symbol: str = "BTCUSDC", capital: float = 5_000.0) -
             log.warning("pullback_v1 error: %s", e)
 
         await asyncio.sleep(FILL_INTERVAL)
+
+
+async def run_scalp_loop(symbol: str = "BTCUSDC", capital: float = 5_000.0) -> None:
+    """1-minute mean-reversion scalper loop. Fast: ticks every 5s on 1m data."""
+    from live_visualizer.strategies.scalp_v1 import ScalpStrategyV1
+    global _strategy
+    log.info("scalp_v1 runner starting  symbol=%s  capital=%.0f", symbol, capital)
+
+    _strategy = ScalpStrategyV1(symbol=symbol, capital=capital)
+    restored = _restore(_strategy)
+    if restored:
+        log.info("scalp_v1: resumed with %d active position(s)", restored)
+
+    candles_1m: List[Candle] = []
+    last_tick = 0.0
+    TICK_INTERVAL = 15   # full signal eval every 15s
+    POLL_INTERVAL = 5    # price + fill check every 5s
+
+    while True:
+        try:
+            now = time.time()
+            price = await asyncio.to_thread(_fetch_price, symbol)
+
+            if now - last_tick > TICK_INTERVAL or not candles_1m:
+                candles_1m = await asyncio.to_thread(_fetch_klines, symbol, "1m", 200)
+                msgs = _strategy.tick(candles_1m, price)
+                for m in msgs:
+                    log.info(m)
+                last_tick = now
+            else:
+                _strategy.fast_check(price)
+
+            _save(_strategy)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("scalp_v1 error: %s", e)
+
+        await asyncio.sleep(POLL_INTERVAL)
+
+
+def run_strategy_loop(symbol: str = "BTCUSDC", capital: float = 5_000.0):
+    """Pick the active strategy loop from VIS_STRATEGY env var."""
+    which = os.getenv("VIS_STRATEGY", "pullback").lower()
+    if which == "scalp":
+        log.info("Active strategy: SCALP (1m mean-reversion)")
+        return run_scalp_loop(symbol, capital)
+    log.info("Active strategy: PULLBACK (multi-TF trend)")
+    return run_pullback_loop(symbol, capital)

@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from live_visualizer.config import settings
-from live_visualizer.runners.pullback_runner import run_pullback_loop, get_state as _pullback_state, get_strategy as _get_strategy, _save as _save_state, get_history as _pullback_history
+from live_visualizer.runners.pullback_runner import run_strategy_loop, get_state as _pullback_state, get_strategy as _get_strategy, _save as _save_state, get_history as _pullback_history
 from live_visualizer.backtest.runner import run_backtest as _run_backtest, run_optimization as _run_optimization
 
 log = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ UI_DIR = Path(__file__).resolve().parents[1] / "ui"
 async def lifespan(app: FastAPI):
     # Start the pullback paper strategy runner
     task = asyncio.create_task(
-        run_pullback_loop(symbol=settings.symbol, capital=5_000.0),
+        run_strategy_loop(symbol=settings.symbol, capital=5_000.0),
         name="pullback_v1",
     )
     log.info("pullback_v1 paper strategy started")
