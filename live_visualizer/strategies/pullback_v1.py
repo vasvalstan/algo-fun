@@ -156,6 +156,7 @@ def _atr(candles: List[Candle], period: int = 14) -> float:
 # ─────────────────────────────── strategy ────────────────────────────────────
 
 class PullbackStrategyV1:
+    NAME = "pullback_v1"
     PIVOT_BARS   = 3
     ZONE_TOL_PCT = 0.003
     ATR_PERIOD   = 14

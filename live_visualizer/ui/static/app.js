@@ -1164,14 +1164,17 @@ function renderHistory(data) {
   }
 
   tbody.innerHTML = rows.map((r, i) => {
-    const isOpen = r.state === "OPEN" || r.state === "PENDING";
     const result = r.result;
+    const isOpen = result === "OPEN" || result === "PENDING";
     const resultCls = result === "TP" ? "pos" : result === "SL" || result === "STOPPED" ? "neg"
                     : isOpen ? "warn" : "";
     const pnlCls = isOpen ? "warn" : (r.pnl >= 0 ? "pos" : "neg");
     const pnlPrefix = r.pnl >= 0 ? "+" : "";
+    const stratShort = (r.strategy || "").replace("_v1", "");
+    const stratColor = stratShort === "scalp" ? "#3b82f6" : "#f0b90b";
     return `<tr>
       <td>${rows.length - i}</td>
+      <td><span style="color:${stratColor};font-weight:600;">${stratShort || "—"}</span></td>
       <td>${fmtTs(r.entry_time)}</td>
       <td>${money2(r.entry_price)}</td>
       <td class="pos">${money2(r.tp_price)}</td>

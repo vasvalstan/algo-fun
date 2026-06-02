@@ -18,6 +18,7 @@ from typing import List, Optional
 from urllib.request import urlopen
 
 from live_visualizer.strategies.pullback_v1 import Candle, LedgerEntry, PullbackStrategyV1, Tranche
+from live_visualizer.runners import trade_history
 
 log = logging.getLogger(__name__)
 
@@ -41,9 +42,20 @@ def get_state() -> dict:
 
 
 def get_history() -> dict:
-    if _strategy is None:
-        return {"rows": [], "total": 0}
-    return _strategy.get_history()
+    """Permanent cross-strategy history + the active strategy's open positions."""
+    open_rows = []
+    if _strategy is not None:
+        # sync first so the very latest closes are in the shared store
+        try:
+            trade_history.sync(_strategy.NAME, _strategy.tranches)
+        except Exception:
+            pass
+        for r in _strategy.get_history().get("rows", []):
+            if r.get("state") in ("OPEN", "PENDING"):
+                r = dict(r)
+                r["strategy"] = _strategy.NAME
+                open_rows.append(r)
+    return trade_history.read(open_rows)
 
 
 def describe() -> dict:
@@ -122,6 +134,35 @@ def _restore(strat: PullbackStrategyV1) -> int:
     return active
 
 
+def _migrate_states_to_history() -> None:
+    """One-time: pull closed trades from every *_v1_state.json into shared history."""
+    import glob
+    for path in glob.glob(os.path.join(_DATA_DIR, "*_v1_state.json")):
+        fname = os.path.basename(path)
+        strat_name = fname.replace("_state.json", "")  # e.g. pullback_v1
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        tranches = []
+        for td in data.get("tranches", []):
+            try:
+                tranches.append(Tranche(
+                    id=td["id"], state=td["state"],
+                    order_price=td["order_price"], entry_price=td["entry_price"],
+                    qty=td["qty"], tp_price=td["tp_price"], sl_price=td["sl_price"],
+                    entry_time=td["entry_time"], exit_time=td.get("exit_time"),
+                    exit_price=td.get("exit_price"), pnl=td.get("pnl", 0.0),
+                    reason=td.get("reason", ""),
+                ))
+            except Exception:
+                continue
+        added = trade_history.sync(strat_name, tranches)
+        if added:
+            log.info("trade_history: migrated %d closed trades from %s", added, strat_name)
+
+
 # ── data fetching ─────────────────────────────────────────────────────────────
 
 def _fetch_klines(symbol: str, interval: str, limit: int) -> List[Candle]:
@@ -198,6 +239,8 @@ async def run_pullback_loop(symbol: str = "BTCUSDC", capital: float = 5_000.0) -
                 _strategy.fast_check(price)
                 _save(_strategy)   # persist after fill checks too
 
+            trade_history.sync(_strategy.NAME, _strategy.tranches)
+
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -237,6 +280,7 @@ async def run_scalp_loop(symbol: str = "BTCUSDC", capital: float = 5_000.0) -> N
                 _strategy.fast_check(price)
 
             _save(_strategy)
+            trade_history.sync(_strategy.NAME, _strategy.tranches)
 
         except asyncio.CancelledError:
             raise
@@ -248,6 +292,10 @@ async def run_scalp_loop(symbol: str = "BTCUSDC", capital: float = 5_000.0) -> N
 
 def run_strategy_loop(symbol: str = "BTCUSDC", capital: float = 5_000.0):
     """Pick the active strategy loop from VIS_STRATEGY env var."""
+    try:
+        _migrate_states_to_history()
+    except Exception as e:
+        log.warning("history migration skipped: %s", e)
     which = os.getenv("VIS_STRATEGY", "pullback").lower()
     if which == "scalp":
         log.info("Active strategy: SCALP (1m mean-reversion)")
