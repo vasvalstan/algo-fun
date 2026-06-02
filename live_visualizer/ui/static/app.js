@@ -452,6 +452,9 @@ function drawChart() {
     drawPriceLine(sl.label, sl.price, "#f6465d", y, pad, width, true);
   }
 
+  // ── PLANNED next trade (shows bot's intent even before it acts) ──
+  drawPlannedTrade(y, pad, width, min, max);
+
   // ── Current price label (Binance-style) ──
   const lastCandle = visible[visible.length - 1];
   if (lastCandle) {
@@ -499,6 +502,63 @@ function drawChart() {
     drawMarker(`Bag ${b.id || ""}`, b.entry_price, "#f0b90b", y, pad, width);
     if (b.tp_price) drawMarker("TP", b.tp_price, "#f97316", y, pad, width);
   }
+
+  drawStatusBanner(pad);
+}
+
+// Plain-English banner explaining what the bot is doing right now.
+function drawStatusBanner(pad) {
+  const regime = botState.regime || "UNKNOWN";
+  const bias   = botState.daily_bias || "";
+  const rsi    = botState.rsi_5m;
+  const zones  = botState.support_zones || [];
+  const bags   = botState.open_bags || [];
+  const price  = botState.last_price || 0;
+
+  let icon, text, color;
+
+  if (bags.length) {
+    const totalUnreal = bags.reduce((s, b) => s + (b.unrealized_pnl || 0), 0);
+    icon = "📈"; color = "#0ecb81";
+    text = `Holding ${bags.length} position${bags.length>1?"s":""} · waiting for TP · unrealized ${totalUnreal>=0?"+":""}$${totalUnreal.toFixed(2)}`;
+  } else if (regime === "CRASH") {
+    icon = "🚨"; color = "#f6465d";
+    text = "CRASH regime — no new entries until market stabilizes";
+  } else if (regime === "BEAR") {
+    icon = "🐻"; color = "#f6465d";
+    text = "BEAR regime — standing aside, not buying dips";
+  } else if (!zones.length) {
+    icon = "🔍"; color = "#f0b90b";
+    text = `No support zone below $${fmt.format(price)} — waiting for price to form a base`;
+  } else if (regime === "SIDEWAYS" && bias === "BEARISH") {
+    icon = "⏸"; color = "#f0b90b";
+    text = "Sideways + bearish bias — waiting for better setup";
+  } else if (rsi != null && rsi >= (botState.params?.rsi_threshold || 45)) {
+    const z = zones[0];
+    icon = "⏳"; color = "#3b82f6";
+    text = `Watching support $${fmt.format(z.low)} — waiting for RSI ${rsi} to drop below ${botState.params?.rsi_threshold||45}`;
+  } else {
+    const z = zones[0];
+    icon = "✅"; color = "#0ecb81";
+    text = `Ready to buy at support $${fmt.format(z.low)} on next pullback confirmation`;
+  }
+
+  ctx.save();
+  ctx.font = "600 12px system-ui";
+  const full = `${icon}  ${text}`;
+  const tw = ctx.measureText(full).width;
+  const bx = pad.left + 6, by = pad.top + 6, bw = tw + 20, bh = 26;
+  ctx.fillStyle = "rgba(13,17,23,0.92)";
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bw, bh, 6);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.textAlign = "left";
+  ctx.fillText(full, bx + 10, by + 17);
+  ctx.restore();
 }
 
 function formatTimeLabel(ts) {
@@ -608,6 +668,61 @@ function drawMarker(label, price, color, y, pad, width) {
   ctx.font = "11px system-ui";
   ctx.fillStyle = color;
   ctx.fillText(label, width - pad.right - 58, yy + 4);
+}
+
+// Draws the bot's INTENDED next trade (entry / TP / SL) so you can see its plan.
+function drawPlannedTrade(y, pad, width, min, max) {
+  const zones = botState.support_zones || [];
+  const price = botState.last_price || 0;
+  const params = botState.params || {};
+  const atr = botState.atr_5m || 0;
+  if (!zones.length || !price) return;
+
+  // Don't draw if a position is already open (its own lines show instead)
+  if ((botState.open_bags || []).length) return;
+
+  // Nearest support below price = planned entry
+  const below = zones.filter(z => z.low < price).sort((a, b) => b.low - a.low);
+  if (!below.length) return;
+  const zone = below[0];
+
+  const entry = zone.low;
+  const tp = params.tp_dollars > 0 ? entry + params.tp_dollars
+                                    : entry * (1 + (params.tp_pct || 0.001));
+  const sl = entry - atr * (params.atr_sl_mult || 0.5);
+
+  // Only draw lines within visible price range
+  const inRange = p => p >= min && p <= max;
+
+  const drawDashLabeled = (price, color, label) => {
+    if (!inRange(price)) return;
+    const yy = y(price);
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, yy);
+    ctx.lineTo(width - pad.right, yy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Label pill on the left
+    ctx.font = "bold 11px system-ui";
+    const txt = `${label} ${fmt.format(price)}`;
+    const w = ctx.measureText(txt).width + 12;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.9;
+    ctx.fillRect(pad.left + 4, yy - 9, w, 18);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#000";
+    ctx.fillText(txt, pad.left + 10, yy + 4);
+    ctx.restore();
+  };
+
+  drawDashLabeled(tp,    "#0ecb81", "🎯 PLAN TP");
+  drawDashLabeled(entry, "#3b82f6", "📥 PLAN BUY");
+  drawDashLabeled(sl,    "#f6465d", "🛑 PLAN SL");
 }
 
 // ── Zoom / Pan helpers ─────────────────────────────────────────────────────
