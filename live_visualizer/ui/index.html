@@ -54,6 +54,7 @@
                 <span><i class="buy"></i>Buy</span>
                 <span><i class="sell"></i>Sell/TP</span>
               </div>
+              <button class="main-tab" onclick="showTab('strategy')" style="white-space:nowrap;">📖 Strategy</button>
               <button class="main-tab" onclick="showTab('history')" style="white-space:nowrap;">📋 History</button>
               <button class="main-tab" onclick="showTab('backtest')" style="white-space:nowrap;">🔬 Backtest</button>
               <button class="main-tab" onclick="showTab('optimize')" style="white-space:nowrap;">🎯 Optimize</button>
@@ -118,6 +119,16 @@
             <div id="source" class="source">Waiting for data...</div>
           </section>
         </aside>
+      </section>
+
+      <!-- STRATEGY TAB -->
+      <section class="history-view" id="tab-strategy" style="display:none;">
+        <div class="history-header">
+          <button class="main-tab active" onclick="showTab('chart')">← Chart</button>
+          <h2 style="margin:0;color:var(--text);font-size:16px;">📖 Current Strategy</h2>
+          <button class="refresh-btn" onclick="loadStrategy()">⟳ Refresh</button>
+        </div>
+        <div id="strategy-content" class="strategy-content">Loading...</div>
       </section>
 
       <!-- HISTORY TAB -->
@@ -239,6 +250,6 @@
         </div>
       </section>
 
-    <script src="/static/app.js?v=8"></script>
+    <script src="/static/app.js?v=9"></script>
   </body>
 </html>

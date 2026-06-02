@@ -482,6 +482,54 @@ class PullbackStrategyV1:
 
     # ── state export ──────────────────────────────────────────────────────────
 
+    def describe(self) -> dict:
+        tp = (f"${self.TP_DOLLARS:.0f} above entry" if self.TP_DOLLARS > 0
+              else f"{self.TP_PCT*100:.2f}% above entry")
+        return {
+            "name": "pullback_v1",
+            "title": "Trend-Filtered Pullback",
+            "summary": (
+                "Only buys pullbacks (dips) inside a confirmed uptrend, at valid support "
+                "zones. Uses multi-timeframe analysis to avoid catching falling knives — it "
+                "stays out entirely during bear markets and crashes."
+            ),
+            "params": {
+                "Take Profit":    tp,
+                "Stop Loss":      f"support low − ATR×{self.ATR_SL_MULT}",
+                "Trade Size":     f"${self.TRANCHE_USDC:.0f} per tranche",
+                "Entry RSI gate": f"5-minute RSI below {self.RSI_THRESHOLD:.0f}",
+            },
+            "sections": [
+                {"heading": "🌍 Regime Filter (decides IF it may trade)", "rules": [
+                    "Weekly trend sets the big regime: BULL / BEAR / SIDEWAYS / CRASH",
+                    "Daily trend sets the bias: BULLISH / SIDEWAYS / BEARISH",
+                    "BULL → look for buys · SIDEWAYS → only near strong support",
+                    "BEAR or CRASH → no new entries at all (stand aside)",
+                ]},
+                {"heading": "📥 Entry Rules (all must be true)", "rules": [
+                    "Regime must allow trading (not CRASH/BEAR)",
+                    "Price must be inside a valid 1H support zone (from pivot lows)",
+                    f"5-minute RSI(14) below {self.RSI_THRESHOLD:.0f} (pullback is oversold)",
+                    "Momentum flip: last 5m candle closes higher than the prior (dip ending)",
+                    "Not already holding a position in that same zone",
+                    f"At least ${self.TRANCHE_USDC:.0f} free capital",
+                ]},
+                {"heading": "🎯 Exit Rules", "rules": [
+                    f"Take profit: {tp}",
+                    f"Stop loss: just below support (support low − ATR×{self.ATR_SL_MULT})",
+                    "If a candle closes below support, the idea is invalid — exit immediately",
+                    "If support breaks, cancel any pending buy orders",
+                ]},
+                {"heading": "🛡️ Risk Rules", "rules": [
+                    "Never average down forever · never add into a clear downtrend",
+                    "Support break = trade idea invalid = exit",
+                    "Maker-style limit entries at the support level",
+                    "0% fees (paper trading)",
+                    f"Total capital: ${self.capital:.0f}",
+                ]},
+            ],
+        }
+
     def get_history(self) -> dict:
         """One consolidated record per tranche with every detail."""
         price = self.current_price

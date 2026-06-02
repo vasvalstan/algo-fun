@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from live_visualizer.config import settings
-from live_visualizer.runners.pullback_runner import run_strategy_loop, get_state as _pullback_state, get_strategy as _get_strategy, _save as _save_state, get_history as _pullback_history
+from live_visualizer.runners.pullback_runner import run_strategy_loop, get_state as _pullback_state, get_strategy as _get_strategy, _save as _save_state, get_history as _pullback_history, describe as _pullback_describe
 from live_visualizer.backtest.runner import run_backtest as _run_backtest, run_optimization as _run_optimization
 
 log = logging.getLogger(__name__)
@@ -126,6 +126,12 @@ async def optimize(body: dict) -> dict:
         _run_optimization, symbol, from_ts, to_ts, capital, grid, sort_by,
     )
     return result
+
+
+@app.get("/api/strategy")
+async def strategy_info() -> dict:
+    """Live, self-describing strategy rules built from current parameters."""
+    return _pullback_describe()
 
 
 @app.get("/api/history")

@@ -812,7 +812,7 @@ canvas.addEventListener("touchend", () => { lastTouchDist = 0; });
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 function showTab(tab) {
-  ["chart","history","backtest","optimize"].forEach(t => {
+  ["chart","strategy","history","backtest","optimize"].forEach(t => {
     const el = document.getElementById("tab-" + t);
     if (el) el.style.display = t === tab ? "" : "none";
   });
@@ -822,7 +822,41 @@ function showTab(tab) {
   if (tab === "history")  loadHistory();
   else if (tab === "backtest") initBacktest();
   else if (tab === "optimize") initOptimize();
+  else if (tab === "strategy") loadStrategy();
   else { resize(); drawChart(); }
+}
+
+// ── Strategy tab (self-describing, mirrors live params) ─────────────────────
+async function loadStrategy() {
+  const el = document.getElementById("strategy-content");
+  try {
+    const d = await fetch("/api/strategy").then(r => r.json());
+    const params = Object.entries(d.params || {}).map(([k, v]) =>
+      `<div class="strat-param"><span>${k}</span><strong>${v}</strong></div>`
+    ).join("");
+
+    const sections = (d.sections || []).map(s => `
+      <div class="strat-section">
+        <h3>${s.heading}</h3>
+        <ul>${s.rules.map(r => `<li>${r}</li>`).join("")}</ul>
+      </div>
+    `).join("");
+
+    el.innerHTML = `
+      <div class="strat-hero">
+        <div class="strat-name">${d.title || d.name}</div>
+        <div class="strat-summary">${d.summary || ""}</div>
+      </div>
+      <div class="strat-params">${params}</div>
+      <div class="strat-sections">${sections}</div>
+      <div class="strat-note">
+        ℹ️ These rules are generated live from the bot's current settings — they always
+        reflect exactly what the bot is doing right now.
+      </div>
+    `;
+  } catch (e) {
+    el.innerHTML = '<div class="history-empty">Failed to load strategy</div>';
+  }
 }
 
 // ── Optimizer ──────────────────────────────────────────────────────────────

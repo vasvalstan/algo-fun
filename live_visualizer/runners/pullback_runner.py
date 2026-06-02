@@ -46,6 +46,13 @@ def get_history() -> dict:
     return _strategy.get_history()
 
 
+def describe() -> dict:
+    if _strategy is None:
+        return {"title": "Starting...", "summary": "Strategy not yet initialized.",
+                "params": {}, "sections": []}
+    return _strategy.describe()
+
+
 # ── persistence ───────────────────────────────────────────────────────────────
 
 def _save(strat: PullbackStrategyV1) -> None:

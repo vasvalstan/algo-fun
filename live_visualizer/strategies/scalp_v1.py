@@ -198,6 +198,51 @@ class ScalpStrategyV1:
         t = self._open(price)
         return f"ok: bought {t.qty:.6f} BTC @ ${price:.2f}  TP=${t.tp_price:.2f}  SL=${t.sl_price:.2f}"
 
+    # ── self-describing rules (mirrors live params) ──────────────────────────
+    def describe(self) -> dict:
+        return {
+            "name": "scalp_v1",
+            "title": "1-Minute Mean-Reversion Scalper",
+            "summary": (
+                "Buys short-term oversold dips on the 1-minute chart and takes a small "
+                f"fixed profit of ${self.TP_DOLLARS:.0f}. Designed for frequent, quick trades "
+                "in choppy or ranging markets — it does not wait for a macro uptrend."
+            ),
+            "params": {
+                "Take Profit":      f"${self.TP_DOLLARS:.0f} above entry",
+                "Stop Loss":        f"${self.SL_DOLLARS:.0f} below entry",
+                "Risk : Reward":    f"1 : {self.SL_DOLLARS/self.TP_DOLLARS:.1f}  (need ~{self.SL_DOLLARS/(self.TP_DOLLARS+self.SL_DOLLARS)*100:.0f}% win rate)",
+                "Trade Size":       f"${self.TRANCHE_USDC:.0f} per position",
+                "Max Positions":    f"{self.MAX_POSITIONS} concurrent",
+            },
+            "sections": [
+                {"heading": "📥 Entry Rules (all must be true)", "rules": [
+                    f"1-minute RSI(14) must be below {self.RSI_OVERSOLD:.0f} (oversold)",
+                    f"Price must be at or below the lower Bollinger Band ({self.BB_PERIOD}-period, {self.BB_MULT:.1f}σ)",
+                    f"Not in a crash — price must be above (24h-high − {self.CRASH_PCT*100:.0f}%)",
+                    f"Fewer than {self.MAX_POSITIONS} positions currently open",
+                    f"At least ${self.MIN_SPACING:.0f} away from any existing open entry",
+                    f"At least ${self.TRANCHE_USDC:.0f} free capital available",
+                ]},
+                {"heading": "🎯 Exit Rules", "rules": [
+                    f"Take profit: sell when price reaches entry + ${self.TP_DOLLARS:.0f}",
+                    f"Stop loss: sell when price falls to entry − ${self.SL_DOLLARS:.0f}",
+                    "Each position is managed independently with its own TP and SL",
+                ]},
+                {"heading": "📦 Position Management", "rules": [
+                    f"Can stack up to {self.MAX_POSITIONS} positions as price keeps dipping",
+                    f"Each new buy must be ${self.MIN_SPACING:.0f}+ below the nearest open entry (no clustering)",
+                    f"Each position is ${self.TRANCHE_USDC:.0f}",
+                    "Positions are checked for fills every 5 seconds; new signals every 15 seconds",
+                ]},
+                {"heading": "🛡️ Risk Guards", "rules": [
+                    f"Crash guard: no new entries when price is more than {self.CRASH_PCT*100:.0f}% below the 24-hour high",
+                    "0% fees (paper trading)",
+                    f"Total capital: ${self.capital:.0f}",
+                ]},
+            ],
+        }
+
     # ── history (same shape as pullback) ──────────────────────────────────────
     def get_history(self) -> dict:
         price = self.current_price
